@@ -1,0 +1,76 @@
+pragma cashscript ^0.10.0;
+
+contract PredictionMarketRedeemTokens() {
+  //////////////////////////////////////////////////////////////////////////////////////////
+ ///////////////////////    Reddem Prediction Market Yes or No Tokens   /////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+// Tokens with the correct prediction will be redeemable for 0.001 BCH each with an oracle message confirming its correct prediction
+// ------------------------------------------------------------------------------------
+//inputs: 
+//  0   masterNFT                [NFT]       (from this contract - proves contract authorization)
+//  1   market Yes or No NFT     [NFT]       (from PredictionMarket contract)
+//  2   market oracle NFT        [NFT]       (from PredictionMarket contract)
+//  3   payout BCH               [BCH]       (from PredictionMarket contract)
+//  4   market Yes or No FT      [FT]        (from user - burned during this transaction)
+//outputs:                                                      
+//  0   masterNFT                [NFT]       (to this contract)  
+//  1   market Yes or No NFT     [NFT]       (to PredictionMarket contract)     
+//  2   market oracle NFT        [NFT]       (to PredictionMarket contract) 
+//  3   BCH change               [BCH]       (to PredictionMarket contract) 
+//  4   BCH payout               [BCH]       (to user)
+// ------------------------------------------------------------------------------------
+//parameters:
+//  oraclePK: public key of the oracle
+//  oracleMessage: message from the autorized oracle [5 bytes for marketID + 4 bytes for Unix timestamp + 1 byte for yes(1) or no(0) = 10 bytes]
+//  oracleSignature: signature that ensures oracle message is authentic
+//////////////////////////////////////////////////////////////////////////////////////////
+    function redeemTokens(pubkey oraclePK, bytes10 oracleMessage, datasig oracleSignature) {
+        bytes5 marketID = oracleMessage.split(5)[0];                                                // marketID should be the first five bytes of the oracle message
+        byte correctPrediction = oracleMessage.split(9)[0];                                         // the correct prediction should be the last byte of the oracle message
+       
+        require(checkDataSig(oracleSignature, oracleMessage, oraclePK));                            // verify the oracle signature and message
+
+        require(tx.inputs.length == 5);                                                             // exactly five inputs
+        
+        require(this.activeInputIndex == 0);                                                        // this contract's UTXO must be input 0         
+        bytes masterID = tx.inputs[0].nftCommitment.split(35)[1];                                   // get ID from input 0 (masterNFT)
+        require(masterID == 0xFFFFFFFFFF);                                                          // must be a masterNFT
+
+        require(tx.inputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketHash));                      // must come from PredictionMarket contract (PredictionMarketHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[1].tokenCategory == masterTokenCategory + 0x01);                                             // input 1 must be an mutable active market Yes or No NFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[1].nftCommitment == marketID + correctPrediction + bytes2(0) + tx.inputs[4].tokenCategory);  // the nftCommitment must match the marketID and correct prediction from the oracle message, and the token category of the fungible tokens being redeemed
+
+        require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketHash));   // must come from PredictionMarket contract (PredictionMarketHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[2].tokenCategory == masterTokenCategory);                                 // input 2 must be an immutable active market oracle NFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[2].nftCommitment == marketID + byte(2) + bytes14(0) + hash160(oraclePK)); // the nftCommitment must match the marketID from the oracle message, and the hash of the public key from the checkDataSig should match
+
+        require(tx.inputs[3].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketHash));   // must come from PredictionMarket contract (PredictionMarketHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[3].tokenCategory == 0x);                                                  // no tokens mixed in with the payout BCH
+
+        require(tx.outputs.length == 5);                                                            // exactly five inputs
+
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT in this contract
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[0].nftCommitment == tx.inputs[0].nftCommitment);                         // carry forward commitment
+        require(tx.outputs[0].value == tx.inputs[0].value);                                         // carry forward satoshis
+
+        require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                     // recreate market Yes or No NFT to PredictionMarket contract
+        require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment);                         // carry forward nftCommitment                
+        require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis
+
+        require(tx.outputs[2].lockingBytecode == tx.inputs[2].lockingBytecode);                     // recreate market oracle NFT to PredictionMarket contract                        
+        require(tx.outputs[2].tokenCategory == tx.inputs[2].tokenCategory);                         // carry forward category + capability                        
+        require(tx.outputs[2].tokenAmount == tx.inputs[2].tokenAmount);                             // carry forward token balance                  
+        require(tx.outputs[2].nftCommitment == tx.inputs[2].nftCommitment);                         // carry forward nftCommitment        
+        require(tx.outputs[2].value == tx.inputs[2].value);                                         // carry forward satoshis                        
+
+        require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                     // send BCH change to Prediction Market contract
+        require(tx.outputs[3].value == tx.inputs[3].value - tx.outputs[4].value);                   // value should be the value of the Prediction Market's BCH UTXO - the payout amount
+
+        require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                     // Payout goes to user who provided the fungible tokens 
+        require(tx.outputs[4].value == tx.inputs[4].tokenAmount * 100_000);                         // user will be paid 0.001 BCH per correct token provided
+    }
+}

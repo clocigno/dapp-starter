@@ -1,0 +1,17 @@
+pragma cashscript ^0.10.0;
+
+contract PredictionMarket() {
+  //////////////////////////////////////////////////////////////////////////////////////////
+ ///////////////////////////////    Store Prediction Market UTXOs   ///////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+//  externalFunction() is used to pair a marketNFT from this PredictionMarket contract with
+//  another contract that performs additional logic on the marketNFT. The other contract's
+//  trust is verified in this contract by checking that the other contract is also providing a 
+//  PredictionMarket masterNFT (categoryID). Those should never exist outside the 
+//  PredictionMarket contract itself OR any trusted contract that was launched alongside PredictionMarket
+//  This contract will hold the marketNFTs, fungible tokens, and BCH
+//////////////////////////////////////////////////////////////////////////////////////////
+    function externalFunction() {                                            // interact with another contract
+        require(tx.inputs[0].tokenCategory == masterTokenCategory);          // input 0 from the other contract must be a immutable master NFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+    }
+}
