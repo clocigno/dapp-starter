@@ -1,105 +1,17 @@
-pragma cashscript ^0.10.0;
+pragma cashscript ^0.13.0;
 
 contract PredictionMarketManager() {
   //////////////////////////////////////////////////////////////////////////////////////////
- ////////////////////////////    Initialize a New Prediction Market   /////////////////////
+ ///////////////////////////////    Store Prediction Market UTXOs   ///////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////
-//  Creates three new UTXOs on the PredictionMarket contract (one NFT, two FTs)
-//  Market creator provides UTXOs for fungible token creation and to cover fees 
-// ------------------------------------------------------------------------------------
-//inputs: 
-//  0   masterNFT           [NFT]       (from this contract - proves contract authorization)
-//  1   creatorUTXO1        [BCH]       (from market creator for the creation of Yes fungible tokens)
-//  2   creatorUTXO2        [BCH]       (from market creator for the creation of No fungible tokens)
-//outputs:
-//  0   masterNFT           [NFT]       (to this contract)
-//  1   marketNFT           [NFT]       (to PredictionMarket contract)
-//  2   Yes Fungible Tokens [FT]        (to PredictionMarket contract)
-//  3   No Fungible Tokens  [FT]        (to PredictionMarket contract)
-//  4   {optional} change   [BCH]       (to market creator)
-// ------------------------------------------------------------------------------------
-//marketNFT committment:
-//  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
-//  yes tokenCategory hash    [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens created the createMarket transaction)
-//  no tokenCategory hash     [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens created the createMarket transaction)
-//  creatorPKH                [20 bytes] (pubkey hash of the market creator who provides the BCH UTXOs)  
-//  oraclePKH                 [20 bytes] (pubkey hash for the oracle that will decide the market's outcome, Yes or No)
-//  platformPKH               [20 bytes] (pubkey hash for the frontend platform)
-//  creator basis points fee  [1 byte]   (trading fee that goes to market creator, in percentage basis points, max 1.27% fee to fit into 1 byte)
-//  oracle basis points fee   [1 byte]   (trading fee that goes to oracle, in percentage basis points, max 1.27% fee to fit into 1 byte)
-//  platform basis points fee [1 byte]   (trading fee that goes to frontend platform, in percentage basis points, max 1.27% fee to fit into 1 byte)
-//  LP basis points fee       [1 byte]   (trading fee that goes to liquiity provider, in percentage basis points, max 1.27% fee to fit into 1 byte)
-// ___________________________________
-//  total                     [124 bytes]
-// ------------------------------------------------------------------------------------
-//parameters:
-//  event: string representing the prediction to be resolved or an IPFS address with relevant market JSON data i.e. "The Cleveland Browns will win the 2026 Super Bowel"
-//  creatorPKH: market creator's pubkeyhash
-//  oraclePKH: pubkey hash for the oracle that will decide the market's outcome (Yes or No)
-//  platformPKH: pubkey hash for frontend platform
-//  creatorBPF: trading fee that goes to market creator, in percentage basis points, max 1.27% fee to fit into 1 byte
-//  oracleBPF: trading fee that goes to oracle, in percentage basis points, max 1.27% fee to fit into 1 byte
-//  platformBPF: trading fee that goes to frontend platform, in percentage basis points, max 1.27% fee to fit into 1 byte
-//  LPBPF: trading fee that goes to liquiity provider, in percentage basis points, max 1.27% fee to fit into 1 byte
+//  externalFunction() is used to pair a marketNFT from this PredictionMarketMnager contract with
+//  another contract that performs additional logic on the marketNFT. The other contract's
+//  trust is verified in this contract by checking that the other contract is also providing a 
+//  PredictionMarket masterNFT (categoryID). Those should never exist outside the 
+//  PredictionMarket contract itself OR any trusted contract that was launched alongside PredictionMarket
+//  This contract will hold the marketNFTs, fungible tokens, and BCH
 //////////////////////////////////////////////////////////////////////////////////////////
-    function createMarket(string event, bytes20 creatorPKH, bytes20 oraclePKH, bytes20 platformPKH, int creatorBPF, int oracleBPF, int platformBPF, int LPBPF) {
-        require(creatorBPF >= 0  && creatorBPF <= 127);                                             // max fee is 127 basis points
-        require(oracleBPF >= 0  && oracleBPF <= 127);                                               // max fee is 127 basis points
-        require(platformBPF >= 0  && platformBPF <= 127);                                           // max fee is 127 basis points
-        require(LPBPF >= 0  && LPBPF <= 127);                                                       // max fee is 127 basis points
-
-        require(tx.inputs.length == 3);                                                             // exactly three inputs
-        
-        require(this.activeInputIndex == 0);                                                        // this contract's UTXO must be input 0         
-        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory + 0x02);                       // verify contract UTXO is a PredictionMarket minting Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
-        require(tx.inputs[0].nftCommitment == bytes128(0));                                         // verify contract UTXO is the minting Master NFT (all 0s in the commitment)
-
-        int inputIndex = 1;                                                                         // index for loop
-        do {
-            require(tx.inputs[inputIndex].lockingBytecode == new LockingBytecodeP2PKH(creatorPKH)); // check that the provided pubkeyhash belongs to the wallet providing inputs 1 and 2
-            require(tx.inputs[inputIndex].tokenCategory == 0x);                                     // creatorUTXOs must not have tokens
-            require(tx.inputs[inputIndex].outpointIndex == 0);                                      // inputs 1 and 2 must have been output 0 of its parent transaction to create fungible tokens
-            inputIndex = inputIndex + 1;                                                            // increment index
-        } while(inputIndex < 3);                                                                    // loop goes through inputs 1 and 2
-
-        require(tx.outputs.length <= 5);                                                            // five or less outputs
-
-        require(tx.outputs[0].nftCommitment == tx.inputs[0].nftCommitment);                         // carry forward Master NFT's nftCommitment 
-        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // carry forward the Master NFT to this contract
-        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward the Master NFT's tokenCategory
-        require(tx.outputs[0].value == tx.inputs[0].value);                                         // carry forward the Master NFT's satoshis
-        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward the Master NFT's existing token balance
-        
-        bytes20 marketID = hash160(event);                                                          // hash the string from the function parameter
-        require(tx.outputs[1].nftCommitment == marketID + 
-                                               hash160(tx.outputs[2].tokenCategory) + 
-                                               hash160(tx.outputs[3].tokenCategory) + 
-                                               creatorPKH + 
-                                               oraclePKH + 
-                                               platformPKH + 
-                                               byte(creatorBPF) + 
-                                               byte(oracleBPF) + 
-                                               byte(platformBPF) + 
-                                               byte(LPBPF));                                        // see explanation above
-        require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketHash));  // send marketNFT to PredictionMarket contract (PredictionMarketHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0]);            // set marketNFT's tokenCategory to same as MasterNFT's (but immutable instead)
-        require(tx.outputs[1].value == 1000);                                                       // set marketNFT's UTXO satoshis to 1000 (for existence)
-        require(tx.outputs[1].tokenAmount == 0);                                                    // prevent fungible tokens
-
-        int outputIndex = 2;                                                                                      // index for loop
-        do {
-            require(tx.outputs[outputIndex].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketHash));  // send fungible tokens to PredictionMarket contract (PredictionMarketHash is just a placeholder - the actual contract would have a hardcoded hash)
-            require(tx.outputs[outputIndex].tokenCategory == tx.inputs[outputIndex - 1].outpointTransactionHash); // tokenCategory should be the parent transaction hash of creatorUTXO1 or creatorUTXO2
-            require(tx.outputs[outputIndex].tokenAmount == 9223372036854775807);                                  // tokenAmount must be max token supply
-            require(tx.outputs[outputIndex].value == 1000);                                                       // set UTXO satoshis to 1000 (for existence)
-            outputIndex = outputIndex + 1;                                                                        // increment index
-        } while(outputIndex < 4);                                                                                 // loop goes through outputs 2 and 3
-
-        if (tx.outputs.length == 5) {                                                               // {optional} change output
-            require(tx.outputs[4].lockingBytecode == tx.inputs[1].lockingBytecode);                 // change must be sent to creator's address
-            require(tx.outputs[4].lockingBytecode == tx.inputs[2].lockingBytecode);                 // change must be sent to creator's address
-            require(tx.outputs[4].tokenCategory == 0x);                                             // change must not have tokens
-        }
+    function externalFunction() {                                            // interact with another contract
+        require(tx.inputs[0].tokenCategory == masterTokenCategory);          // input 0 from the other contract must be a immutable master NFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
     }
-
 }
