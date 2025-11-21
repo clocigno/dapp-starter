@@ -1,28 +1,23 @@
 pragma cashscript ^0.13.0;
 
-contract PredictionMarketProvideLiquidity() {
+contract PredictionMarketRemoveLiquidity() {
   //////////////////////////////////////////////////////////////////////////////////////////
- ///////////////////////    Provide Liquity to a Prediction Market   //////////////////////
+ ///////////////////////    Remove Liquity to from a Prediction Market   //////////////////
 //////////////////////////////////////////////////////////////////////////////////////////
 // ------------------------------------------------------------------------------------
 //inputs: 
 //  0   masterNFT                [NFT]       (from this contract - proves contract authorization)
-//  1   receiptNFT - Minting     [NFT]       (from this contract - provides LP with NFT receipt for withdrawing liquidity and fees later)
+//  1   receiptNFT - Minting     [NFT]       (from this contract - for partial liquidity removals where LP will still have liquidity in the pool)
 //  2   marketNFT                [NFT]       (from PredictionMarketManager contract)
-//  3   yesTokens                [FT]        (from PredictionMarketManager contract - LP is required to buy an amount of yes/no shares to keep market in balance)
-//  4   noTokens                 [FT]        (from PredictionMarketManager contract - LP is required to buy an amount of yes/no shares to keep market in balance)
-//  5   LP BCH                   [BCH]       (from LP)
+//  3   LP BCH                   [BCH]       (from PredictionMarketManager contract)
+//  4   receiptNFT               [NFT]       (from LP)
 //outputs:                                                     
 //  0   masterNFT                [NFT]       (to this contract)  
 //  1   receiptNFT - Minting     [NFT]       (to this contract)  
 //  2   marketNFT                [NFT]       (to PredictionMarketManager contract)     
-//  3   BCH for LP claim         [BCH]       (to PredictionMarketManager contract) 
-//  4   yesTokenChange           [FT]        (to PredictionMarketManager contract) 
-//  5   noTokenChange            [FT]        (to PredictionMarketManager contract) 
-//  6   receiptNFT               [NFT]       (to LP)
-//  7   {optional} yesTokens     [FT]        (to LP)
-//  8   {optional} noTokens      [FT]        (to LP)
-//  9   change                   [BCH]       (to LP)
+//  3   change                   [BCH]       (to PredictionMarketManager contract)
+//  4   BCH for LP claim         [BCH]       (to LP) 
+//  5   {optional} new receipt   [NFT]       (to LP) 
 // ------------------------------------------------------------------------------------
 //marketNFT committment:
 //  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
@@ -49,7 +44,7 @@ contract PredictionMarketProvideLiquidity() {
 // ------------------------------------------------------------------------------------
 //parameters:
 //  event: string representing the prediction to be resolved or an IPFS address with relevant market JSON data i.e. "The Cleveland Browns will win the 2026 Super Bowel"
-//  delta_b: int representing how much liquidity to be added (adding 100 b to a pool of 900 b, would mean you could claim 10% of the trading fees reserved for LPs)
+//  delta_b: int representing how much liquidity to be removed 
 //////////////////////////////////////////////////////////////////////////////////////////
     int SCALE = 1 << 60;  // Fixed-point scale factor (2^60)
     int LN2_FIXED = 799144290325165952;  // ln(2) * SCALE
@@ -175,10 +170,10 @@ contract PredictionMarketProvideLiquidity() {
         return cost;
     }
 
-    function provideLiquidity(string event, int delta_b) {
-        require(delta_b > 0);                                                                       // must be adding liquidity
+    function removeLiquidity(string event, int delta_b) {
+        require(delta_b < 0);                                                                       // must be removing liquidity
 
-        require(tx.inputs.length == 6);                                                             // exactly six inputs
+        require(tx.inputs.length == 5);                                                             // exactly five inputs
         
         require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must ome from this contract       
         require(tx.inputs[0].tokenCategory == masterNFTTokenCategory);                              // verify UTXO is a PredictionMarket Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
@@ -195,18 +190,17 @@ contract PredictionMarketProvideLiquidity() {
         require(tx.inputs[2].tokenCategory == masterTokenCategory);                                        // must be an immutable active marketNFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
         require(marketID == nftMarketID);                                                                  // the marketID derived from the function parameter must match the one on the nftCommitment
 
-        bytes20 yesTokenCategory, bytes88 final88 = final108.split(20);                                    // grab yes token category from marketNFT
-        bytes20 noTokencategory, bytes68 final68 = final88.split(20);                                      // grab no token category from marketNFT
-
+        require(tx.inputs[3].tokenCategory == 0x);                                                         // must have no tokens
         require(tx.inputs[3].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.inputs[3].tokenCategory == yesTokenCategory);                                           // must match the yes token category from the marketNFT commitment
 
-        require(tx.inputs[4].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.inputs[4].tokenCategory == noTokencategory);                                            // must match the no token category from the marketNFT commitment
+        bytes20 receiptMarketID, bytes6 LP_b_current = tx.inputs[4].nftCommitment.split(20);        // grab info from receipt
 
-        require(tx.inputs[5].tokenCategory == 0x);                                                  // must have no tokens
+        require(receiptMarketID == marketID);                                                       // receipt marketID from match the one from parameters and from market NFT
+        require(int(LP_b_current) > 0);                                                                  // must have liquidity in pool
+        require(tx.inputs[4].tokenCategory == receiptNFTTokenCategory);                             // must be a PredictionMarket Receipt NFT (receiptNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[4].tokenAmount == 0);                                                     // no fungible tokens here
 
-        require(tx.outputs.length <= 10);                                                           // ten or less outputs
+        require(tx.outputs.length <= 6);                                                            // six or less outputs
 
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
@@ -220,80 +214,51 @@ contract PredictionMarketProvideLiquidity() {
         require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment);                         // carry forward nftCommitment                
         require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis        
 
-        bytes43 next43, bytes25 last25 = final68.split(43);
+        bytes100 first103, bytes25 last25 = tx.inputs[2].nftCommitment.split(103);                  // grab last 25 bytes of marketNFT commitment
         bytes6 b_current, bytes19 last19 = last25.split(6);                                         // grab current b from marketNFT commitment
         bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
         bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
+        bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab current accumulated trading fees from marketNFT commitment
         int b_new = int(b_current) + delta_b;                                                       // calculate new b value after this transaction
         int k_fixed = floor_div(b_new * SCALE, b_current);                                          // scaling ratio * SCALE (fixed-point)
-        int q_yes_new = floor_div(int(q_yes_current) * k_fixed, SCALE);                             // scaled q_yes (proportional to b increase)
-        int q_no_new = floor_div(int(q_no_current) * k_fixed, SCALE);                               // scaled q_no (proportional to b increase)
+        int q_yes_new = floor_div(int(q_yes_current) * k_fixed, SCALE);                             // new scaled q_yes (proportional to b increase)
+        int q_no_new = floor_div(int(q_no_current) * k_fixed, SCALE);                               // new scaled q_no (proportional to b increase)
+        int fee_share = floor_div(-delta_b * int(trading_fees_current), int(b_current));            // LP's pro-rata fees
+        int trading_fees_new = trading_fees_current - fee_share;                                    // new updated accumulated trading fees for commitment
 
         require(tx.outputs[2].lockingBytecode == tx.inputs[2].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
         require(tx.outputs[2].tokenCategory == tx.inputs[2].tokenCategory);                         // carry forward category + capability
         require(tx.outputs[2].tokenAmount == tx.inputs[2].tokenAmount);                             // carry forward token balance
-        require(tx.outputs[2].nftCommitment == tx.inputs[2].nftCommitment == nftMarketID +          // carry over the first part of the commitment as is
-                                                                             yesTokenCategory +
-                                                                             noTokencategory +
-                                                                             next43 +
-                                                                             bytes6(b_new) +        // update b 
-                                                                             bytes6(q_yes_new) +    // update q_yes
-                                                                             bytes6(q_no_new) +     // update q_no
-                                                                             last7
+        require(tx.outputs[2].nftCommitment == tx.inputs[2].nftCommitment == first103 +
+                                                                             bytes6(b_new) +            // update b 
+                                                                             bytes6(q_yes_new) +        // update q_yes
+                                                                             bytes6(q_no_new) +         // update q_no
+                                                                             bytes6(trading_fees_new) + // update trading fees
+                                                                             marketStatus;
                 );
         require(tx.outputs[2].value == tx.inputs[2].value);                                         // carry forward satoshis                 
 
         int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
         int c_new = lmsr_cost(b_new, q_yes_new, q_no_new);                                          // calc LMSR cost after tx
-        int deposit = c_new - c_current;                                                            // difference is what user owes
-        require(deposit > 0);                                                                       // depsoit amount must be > 0
+        int withdrawl = -(c_new - c_current);                                                       // difference is what user receives
+        require(withdrawl > 0);                                                                     // withdrawl amount must be > 0
 
-        require(tx.outputs[3].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send BCH to PredictionMarketManager contract
-        require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens on output 3
-        require(tx.outputs[3].value >= deposit);                                                    // must be at least the deposit required
+        require(tx.outputs[3].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send BCH change to PredictionMarketManager contract
+        require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens in the change
+        require(tx.outputs[3].value == tx.inputs[3].value - tx.outputs[4].value);                   // change should the BCH input UTXO value - payout
         
-        int delta_yes = q_yes_new - int(q_yes_current);                                             // calc change in q_yes
-        int delta_no = q_no_new - int(q_no_current);                                                // calc change in q_no
-        int lp_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                                 // calc yes tokens owed to LP
-        int lp_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                   // calc no tokens owed to LP
+        require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                     // send BCH to LP
+        require(tx.outputs[4].tokenCategory == 0x);                                                 // no tokens in the BCH
+        require(tx.outputs[4].value <= withdrawl);                                                  // payout should be less than equal to differences in LMSR costs (can be used to pay for fees)
 
-        require(tx.outputs[4].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send yes token change to PredictionMarketManager contract
-        require(tx.outputs[4].tokenCategory == tx.inputs[3].tokenCategory);                         // tokenCategory should match the yes token category from earlier
-        require(tx.outputs[4].tokenAmount == tx.inputs[3].tokenAmount - lp_yes_tokens);             // token amount should be the original token amount - what was sent to LP
-        require(tx.outputs[4].value == tx.inputs[3].value);                                         // carry over sats
+        int LP_leftover_b = int(LP_b_current) + delta_b;
 
-        require(tx.outputs[5].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send no token change to PredictionMarketManager contract
-        require(tx.outputs[5].tokenCategory == tx.inputs[4].tokenCategory);                         // tokenCategory should match the yes token category from earlier
-        require(tx.outputs[5].tokenAmount == tx.inputs[4].tokenAmount - lp_no_tokens);              // token amount should be the original token amount - what was sent to LP
-        require(tx.outputs[5].value == tx.inputs[4].value);                                         // carry over sats
-
-        require(tx.outputs[6].lockingBytecode == tx.inputs[5].lockingBytecode);                     // receipt NFT should be sent to LP
-        require(tx.outputs[6].tokenCategory == tx.inputs[1].tokenCategory.split(32)[0]);            // same token category as the minting receipt NFT but immutable
-        require(tx.outputs[6].tokenAmount == 0);                                                    // no fungible tokens here
-        require(tx.outputs[6].nftCommitment == marketID + bytes6(delta_b));                         // set NFT commitment on receipt = marketID + liquidity provided in this tx
-        require(tx.outputs[6].value == 1000);                                                       // set UTXO satoshis to 1000 (for existence)                
-
-        int outputIndex = 7;                                                                        // index for uncertain outputs  
-
-        // Neutral Yes tokens to LP (only if >0)
-        if (lp_yes_tokens > 0) {
-            require(tx.outputs[outputIndex].lockingBytecode == tx.inputs[5].lockingBytecode);       // yes tokens should be sent to LP
-            require(tx.outputs[outputIndex].tokenCategory == tx.inputs[3].tokenCategory);           // tokenCategory should match the yes token category from earlier
-            require(tx.outputs[outputIndex].tokenAmount == lp_yes_tokens);                          // token amount should match the calulation above
-            require(tx.outputs[outputIndex].value == 1000);                                         // set UTXO satoshis to 1000 (for existence)
-            outputIndex = outputIndex + 1;
-        }
-
-        // Neutral No tokens to LP (only if >0)
-        if (lp_no_tokens > 0) {
-            require(tx.outputs[outputIndex].lockingBytecode == tx.inputs[5].lockingBytecode);       // no tokens should be sent to LP
-            require(tx.outputs[outputIndex].tokenCategory == tx.inputs[4].tokenCategory);           // tokenCategory should match the no token category from earlier
-            require(tx.outputs[outputIndex].tokenAmount == lp_no_tokens);                           // token amount should match the calulation above
-            require(tx.outputs[outputIndex].value == 1000);                                         // set UTXO satoshis to 1000 (for existence)
-            outputIndex = outputIndex + 1;
-        }
-
-        require(tx.outputs[outputIndex].lockingBytecode == tx.inputs[5].lockingBytecode);           // change must be sent to LP's address
-        require(tx.outputs[outputIndex].tokenCategory == 0x);                                       // change must not have tokens
+        if (LP_leftover_b > 0) {
+            require(tx.outputs[5].lockingBytecode == tx.inputs[4].lockingBytecode);                 // new receipt NFT should be sent to LP
+            require(tx.outputs[5].tokenCategory == tx.inputs[1].tokenCategory.split(32)[0]);        // same token category as the minting receipt NFT but immutable
+            require(tx.outputs[5].tokenAmount == 0);                                                // no fungible tokens here
+            require(tx.outputs[5].nftCommitment == marketID + bytes6(LP_leftover_b));               // set NFT commitment on receipt = marketID + liquidity leftver after this tx
+            require(tx.outputs[5].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)                
+        }                                                                                           // old receipt NFT is implicitly burned
     }
 }
