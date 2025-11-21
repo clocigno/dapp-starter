@@ -1,0 +1,282 @@
+pragma cashscript ^0.13.0;
+
+contract PredictionMarketBuyTokens() {
+  //////////////////////////////////////////////////////////////////////////////////////////
+ ///////////////////////    Buy Yes/No Tokens for Prediction Markets   ////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+// ------------------------------------------------------------------------------------
+//inputs: 
+//  0   masterNFT                 [NFT]       (from this contract - proves contract authorization)
+//  1   marketNFT                 [NFT]       (from PredictionMarketManager contract)
+//  2   {optional} yesTokens      [FT]        (from PredictionMarketManager contract - function parameter determines if buying yes or no)
+//  3   {optional} noTokens       [FT]        (from PredictionMarketManager contract - function parameter determines if buying yes or no)
+//  4   BCH for the purchase      [BCH]       (from Buyer)
+//outputs:                                                     
+//  0   masterNFT                 [NFT]       (to this contract)  
+//  1   marketNFT                 [NFT]       (to PredictionMarketManager contract)     
+//  2   BCH for the purchase      [BCH]       (to PredictionMarketManager contract) 
+//  3   {optional} yesTokenChange [FT]        (to PredictionMarketManager contract - function parameter determines if buying yes or no) 
+//  4   {optional} noTokenChange  [FT]        (to PredictionMarketManager contract - function parameter determines if buying yes or no) 
+//  5   {optional} yesTokens      [FT]        (to Buyer - function parameter determines if buying yes or no)
+//  6   {optional} noTokens       [FT]        (to Buyer - function parameter determines if buying yes or no)
+//  7   change                    [BCH]       (to Buyer)
+// ------------------------------------------------------------------------------------
+//marketNFT committment:
+//  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
+//  yes tokenCategory hash    [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  no tokenCategory hash     [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  creatorPKH                [20 bytes] (pubkey hash of the market creator (likely frontend platform) who provides the BCH UTXOs)  
+//  oraclePKH                 [20 bytes] (pubkey hash for the oracle that will decide the market's outcome, Yes or No)
+//  creator basis points fee  [1 bytes]  (trading fee that goes to market creator, in percentage basis points)
+//  oracle basis points fee   [1 bytes]  (trading fee that goes to oracle, in percentage basis points)
+//  LP basis points fee       [1 bytes]  (trading fee that goes to liquiity provider)
+//  b                         [6 bytes]  (measure of liquidity pool depth, starts at 0 and goes up as liquity is added)
+//  q_yes                     [6 bytes]  (quantity of "Yes" unit shares outstanding in sats, starts at 0 amd goes up as "Yes" shares are purchased)
+//  q_no                      [6 bytes]  (quantity of "No" unit shares outstanding in sats, starts at 0 amd goes up as "No" shares are purchased)
+//  trading fees              [6 bytes]  (accumulated trading fees)
+//  market status             [1 byte]   (from oracle messages)
+// ___________________________________
+//  total                     [128 bytes]
+// ------------------------------------------------------------------------------------
+//parameters:
+//  event: string representing the prediction to be resolved or an IPFS address with relevant market JSON data i.e. "The Cleveland Browns will win the 2026 Super Bowel"
+//  yesOrNo: bool representing if the user will buy Yes Tokens
+//  numberOfShares: int representing how many shares are desired by the buyer
+//////////////////////////////////////////////////////////////////////////////////////////
+    int SCALE = 1 << 60;  // Fixed-point scale factor (2^60)
+    int LN2_FIXED = 799144290325165952;  // ln(2) * SCALE
+    int INV_LN2_FIXED = 1663314137230540288;  // 1 / ln(2) * SCALE
+    int PAYOUT_PER_SHARE = 100000;  // sats payout per fungible token
+
+    function bitLength(int x) : int {  // Computes bit length of x 
+        if (x <= 0) {
+            return 0;  // Handle non-positive
+        }
+        int length = 0;
+        int temp = x;
+        // Loop with right shifts to count bits
+        do {
+            length = length + 1;  // Increment bit count
+            temp = temp >> 1;  // Shift right (divide by 2)
+            if (temp == 0) {
+                break;  // Stop if no bits left
+            }
+        } while (true);
+        return length;
+    }
+
+    function floor_div(int a, int b) : int {  // Emulates Python floor division (rounds towards -inf)
+        int quot = a / b;  // Integer quotient (truncates towards zero)
+        int rem = a % b;  // Remainder
+        // If signs differ and remainder exists, adjust down
+        if ((a < 0 && b > 0) || (a > 0 && b < 0)) {
+            if (rem != 0) {
+                quot = quot - 1;  // Floor adjustment for negative cases
+            }
+        }
+        return quot;
+    }
+
+    function approx_exp_fixed(int x_fixed) : int {  // Approximates exp(x_fixed / SCALE) * SCALE using Taylor series
+        int result = SCALE;  // Start with 1.0 in fixed-point
+        int term = x_fixed;  // First term: x
+        result = result + term;
+        int k = 2;
+        do {
+            term = floor_div(term * x_fixed, SCALE * k);  // Next term: prev * x / (k * SCALE)
+            result = result + term;  // Accumulate
+            if (abs(term) < 1) {
+                break;  // Stop if term negligible
+            }
+            k = k + 1;
+            if (k >= 100) {
+                break;  // Safety cap
+            }
+        } while (true);
+        return result;
+    }
+
+    function approx_pow2_fixed(int x_fixed) : int {  // Approximates 2^(x_fixed / SCALE) * SCALE
+        int exponent_fixed = floor_div(x_fixed * LN2_FIXED, SCALE);  // x * ln(2) for exp conversion
+        if (exponent_fixed < -60 * SCALE) {
+            return 0;  // Underflow to zero
+        } else {
+            return approx_exp_fixed(exponent_fixed);  // Compute via exp
+        }
+    }
+
+    function approx_ln1p_fixed(int u_fixed) : int {  // Approximates ln(1 + u_fixed / SCALE) * SCALE using Taylor series
+        if (u_fixed == 0) {
+            return 0;  // Base case
+        }
+        int result = 0;
+        int power = u_fixed;  // Start with u
+        int sign = 1;
+        int term = power / 1;  // First term: u/1
+        result = result + sign * term;
+        int k = 2;
+        do {
+            power = floor_div(power * u_fixed, SCALE);  // Next power: prev * u / SCALE
+            if (power == 0) {
+                break;  // Underflow stop
+            }
+            term = power / k;  // Term: power / k (integer div)
+            sign = -sign;  // Alternate sign
+            result = result + sign * term;
+            if (abs(term) < 1) {
+                break;  // Negligible term stop
+            }
+            k = k + 1;
+            if (k >= 100000) {
+                break;  // Safety cap
+            }
+        } while (true);
+        return result;
+    }
+
+    function approx_log2_fixed(int y_fixed) : int {  // Approximates log2(y_fixed / SCALE) * SCALE
+        if (y_fixed <= 0) {
+            require(false, "y must be positive");  // Error on invalid input
+        }
+        if (y_fixed < 1) {
+            return 0;  // Tiny values to zero
+        }
+        int exp = bitLength(y_fixed) - 1;  // Integer part of log2
+        int shift = 60 - exp;  // Shift to normalize to [1,2) * SCALE
+        int mantissa_fixed;
+        if (shift > 0) {
+            mantissa_fixed = y_fixed << shift;  // Multiply by 2^shift
+        } else {
+            mantissa_fixed = y_fixed >> (-shift);  // Divide by 2^|shift|
+        }
+        int u_fixed = mantissa_fixed - SCALE;  // u for ln(1+u)
+        int ln_frac = approx_ln1p_fixed(u_fixed);  // Fractional ln
+        int frac_log2_fixed = floor_div(ln_frac * INV_LN2_FIXED, SCALE);  // Convert to log2
+        int total_log2_fixed = (exp - 60) * SCALE + frac_log2_fixed;  // Combine integer + fraction
+        return total_log2_fixed;
+    }
+
+    function lmsr_cost(int b, int q_yes, int q_no) : int {  // Computes LMSR cost C = b * log2(2^{q_yes/b} + 2^{q_no/b})
+        int x_yes_fixed = floor_div(q_yes * SCALE, b);  // q_yes / b * SCALE
+        int pow_yes = approx_pow2_fixed(x_yes_fixed);  // 2^{q_yes/b} * SCALE
+        int x_no_fixed = floor_div(q_no * SCALE, b);  // q_no / b * SCALE
+        int pow_no = approx_pow2_fixed(x_no_fixed);  // 2^{q_no/b} * SCALE
+        int sum_fixed = pow_yes + pow_no;  // Sum * SCALE
+        int log2_fixed = approx_log2_fixed(sum_fixed);  // log2(sum) * SCALE
+        int cost = floor_div(b * log2_fixed, SCALE);  // b * log2(sum)
+        return cost;
+    }
+
+    function buyTokens(string event, bool yesOrNo, int numberOfShares) {
+        require(tx.inputs.length == 4);                                                             // exactly four inputs
+        
+        require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must ome from this contract       
+        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory);                              // verify UTXO is a PredictionMarket Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[0].nftCommitment == bytes128(0));                                         // all 0s in the commitment
+
+        bytes20 marketID = hash160(event);                                                                 // hash the string from the function parameter
+        bytes20 nftMarketID, bytes108 final108 = tx.inputs[1].nftCommitment.split(20);                     // grab the marketID from the nftCommitment
+
+        require(tx.inputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[1].tokenCategory == masterTokenCategory);                                        // must be an immutable active marketNFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(marketID == nftMarketID);                                                                  // the marketID derived from the function parameter must match the one on the nftCommitment
+
+        bytes20 yesTokenCategory, bytes88 final88 = final108.split(20);                                    // grab yes token category from marketNFT commitment
+        bytes20 noTokencategory, bytes68 final68 = final88.split(20);                                      // grab no token category from marketNFT commitment
+
+        require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        if(yesOrNo) {
+            require(tx.inputs[2].tokenCategory == yesTokenCategory);                                       // must match the yes token category from the marketNFT commitment
+        } else {
+            require(tx.inputs[2].tokenCategory == noTokencategory);                                        // must match the no token category from the marketNFT commitment
+        }
+
+        require(tx.inputs[3].tokenCategory == 0x);                                                  // must have no tokens
+
+        require(tx.outputs.length = 6);                                                             // exactly six outputs
+
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[0].nftCommitment == tx.inputs[0].nftCommitment);                         // carry forward commitment
+        require(tx.outputs[0].value == tx.inputs[0].value);                                         // carry forward satoshis
+
+        bytes109 first100, bytes19 last28 = tx.inputs[1].nftCommitment.split(100);                  // grab info from marketNFT commitment
+        byte creatorBPF, bytes27 last27 = last28.split(1);                                          // grab market creator basis points fee
+        byte oracleBPF, bytes26 last26 = last27.split(1);                                           // grab oracle basis points fee
+        byte LPBPF, bytes25 last25 = last26.split(1);                                               // grab LP basis points fee
+        bytes6 b_current, bytes19 last19 = last25.split(6);
+        bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
+        bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
+        bytes6 trading_fees_curent, byte marketStatus = last7.split(6);                             // grab market status from marketNFT commitment
+        require(marketStatus == 3);                                                                 // market must still be ongoing
+        int q_yes_new = int(q_yes_curent);
+        int q_no_new = int(q_no_curent);
+        if(yesOrNo) {
+            q_yes_new = q_yes_new + numberOfShares * PAYOUT_PER_SHARE;                              // if buying yes tokens increase q_yes                 
+        } else {
+            q_no_new = q_no_new + numberOfShares * PAYOUT_PER_SHARE;                                // otherwise increase q_no    
+        }
+        int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
+        int c_new = lmsr_cost(int(b_current), q_yes_new, q_no_new);                                 // calc LMSR cost after tx
+        int deposit_sub_total = c_new - c_current;                                                  // total before fees
+        int total_BPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);
+        int deposit_total = floor_div(deposit_sub_total * (10000 + total_BPF), 10000);              // total deposit due including fees
+
+        require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
+        require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment == first100 +             // carry over the first part of the commitment as is
+                                                                             creatorBPF +    
+                                                                             oracleBPF +     
+                                                                             LPBPF +
+                                                                             b_current +
+                                                                             bytes6(q_yes_new) +    // update q_yes
+                                                                             bytes6(q_yes_new) +    // update q_no
+                                                                             last7
+                );
+        require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis                 
+
+        require(deposit_total > 0);                                                                 // depsoit amount must be > 0
+
+        require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                     // send BCH to PredictionMarketManager contract
+        require(tx.outputs[2].tokenCategory == 0x);                                                 // no tokens on output 3
+        require(tx.outputs[2].value >= deposit_total);                                              // must be at least the deposit required
+        
+        int delta_yes = q_yes_new - int(q_yes_current);                                             // calc change in q_yes
+        int delta_no = q_no_new - int(q_no_current);                                                // calc change in q_no
+        int buyer_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                              // calc yes tokens owed to LP
+        int buyer_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                // calc no tokens owed to LP
+
+        if(buyer_yes_tokens > 0) {
+            require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                 // send yes token change to PredictionMarketManager contract
+            require(tx.outputs[3].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[3].tokenAmount == tx.inputs[2].tokenAmount - buyer_yes_tokens);      // token amount should be the original token amount - what was sent to buyer
+            require(tx.outputs[3].value == tx.inputs[2].value);                                     // carry over sats
+        } 
+        
+        if (buyer_no_tokens > 0) {
+            require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                 // send no token change to PredictionMarketManager contract
+            require(tx.outputs[3].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[3].tokenAmount == tx.inputs[2].tokenAmount - buyer_no_tokens);       // token amount should be the original token amount - what was sent to buyer
+            require(tx.outputs[3].value == tx.inputs[2].value);                                     // carry over sats
+        }
+
+        if (buyer_yes_tokens > 0) {
+            require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                 // yes tokens should be sent to buyer
+            require(tx.outputs[4].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[4].tokenAmount == buyer_yes_tokens);                                 // token amount should match the calulation above
+            require(tx.outputs[4].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
+        }
+
+        if (buyer_no_tokens > 0) {
+            require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                 // no tokens should be sent to buyer
+            require(tx.outputs[4].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the no token category from earlier
+            require(tx.outputs[4].tokenAmount == buyer_no_tokens);                                  // token amount should match the calulation above
+            require(tx.outputs[4].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
+        }
+
+        require(tx.outputs[5].lockingBytecode == tx.inputs[4].lockingBytecode);                     // change must be sent to buyer's address
+        require(tx.outputs[5].tokenCategory == 0x);                                                 // change must not have tokens
+    }
+}
