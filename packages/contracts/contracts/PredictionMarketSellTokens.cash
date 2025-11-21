@@ -1,25 +1,25 @@
 pragma cashscript ^0.13.0;
 
-contract PredictionMarketBuyTokens() {
+contract PredictionMarketSellTokens() {
   //////////////////////////////////////////////////////////////////////////////////////////
- ///////////////////////    Buy Yes/No Tokens for Prediction Markets   ////////////////////
+ ///////////////////////    Sell Yes/No Tokens for Prediction Markets   ////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////
 // ------------------------------------------------------------------------------------
 //inputs: 
 //  0   masterNFT                 [NFT]       (from this contract - proves contract authorization)
 //  1   marketNFT                 [NFT]       (from PredictionMarketManager contract)
-//  2   {optional} yesTokens      [FT]        (from PredictionMarketManager contract - function parameter determines if buying yes or no)
-//  2   {optional} noTokens       [FT]        (from PredictionMarketManager contract - function parameter determines if buying yes or no)
-//  3   BCH for the purchase      [BCH]       (from Buyer)
+//  2   BCH for the sale          [BCH]       (from PredictionMarketManager contract)
+//  3   {optional} yesTokens      [FT]        (from Seller - function parameter determines if selling yes or no)
+//  3   {optional} noTokens       [FT]        (from Seller - function parameter determines if selling yes or no)
 //outputs:                                                     
 //  0   masterNFT                 [NFT]       (to this contract)  
 //  1   marketNFT                 [NFT]       (to PredictionMarketManager contract)     
-//  2   BCH for the purchase      [BCH]       (to PredictionMarketManager contract) 
-//  3   {optional} yesTokenChange [FT]        (to PredictionMarketManager contract - function parameter determines if yes or no) 
-//  3   {optional} noTokenChange  [FT]        (to PredictionMarketManager contract - function parameter determines if yes or no) 
-//  4   {optional} yesTokens      [FT]        (to Buyer - function parameter determines if yes or no)
-//  4   {optional} noTokens       [FT]        (to Buyer - function parameter determines if yes or no)
-//  5   change                    [BCH]       (to Buyer)
+//  2   {optional} yesTokens      [FT]        (to PredictionMarketManager contract) - function parameter determines if yes or no)
+//  2   {optional} noTokens       [FT]        (to PredictionMarketManager contract) - function parameter determines if yes or no)
+//  3   change                    [BCH]       (to PredictionMarketManager contract)
+//  4   BCH for the sale          [BCH]       (to Seller) 
+//  5   {optional} yesTokenChange [FT]        (to Seller - function parameter determines if yes or no) 
+//  5   {optional} noTokenChange  [FT]        (to Seller - function parameter determines if yes or no) 
 // ------------------------------------------------------------------------------------
 //marketNFT committment:
 //  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
@@ -41,7 +41,7 @@ contract PredictionMarketBuyTokens() {
 //parameters:
 //  event: string representing the prediction to be resolved or an IPFS address with relevant market JSON data i.e. "The Cleveland Browns will win the 2026 Super Bowel"
 //  yesOrNo: bool representing if the user will buy Yes Tokens
-//  numberOfShares: int representing how many shares are desired by the buyer
+//  numberOfShares: int representing how many shares to be sold by seller
 //////////////////////////////////////////////////////////////////////////////////////////
     int SCALE = 1 << 60;  // Fixed-point scale factor (2^60)
     int LN2_FIXED = 799144290325165952;  // ln(2) * SCALE
@@ -167,7 +167,7 @@ contract PredictionMarketBuyTokens() {
         return cost;
     }
 
-    function buyTokens(string event, bool yesOrNo, int numberOfShares) {
+    function sellTokens(string event, bool yesOrNo, int numberOfShares) {
         require(tx.inputs.length == 4);                                                             // exactly four inputs
         
         require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must come from this contract       
@@ -185,15 +185,15 @@ contract PredictionMarketBuyTokens() {
         bytes20 noTokencategory, bytes68 final68 = final88.split(20);                                      // grab no token category from marketNFT commitment
 
         require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[2].tokenCategory == 0x);                                                         // must have no tokens
+
         if(yesOrNo) {
-            require(tx.inputs[2].tokenCategory == yesTokenCategory);                                       // must match the yes token category from the marketNFT commitment
+            require(tx.inputs[3].tokenCategory == yesTokenCategory);                                       // must match the yes token category from the marketNFT commitment
         } else {
-            require(tx.inputs[2].tokenCategory == noTokencategory);                                        // must match the no token category from the marketNFT commitment
+            require(tx.inputs[3].tokenCategory == noTokencategory);                                        // must match the no token category from the marketNFT commitment
         }
-
-        require(tx.inputs[3].tokenCategory == 0x);                                                  // must have no tokens
-
-        require(tx.outputs.length = 6);                                                             // exactly six outputs
+        
+        require(tx.outputs.length <= 6);                                                            // less than or equal to six outputs
 
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
@@ -213,16 +213,16 @@ contract PredictionMarketBuyTokens() {
         int q_yes_new = int(q_yes_curent);
         int q_no_new = int(q_no_curent);
         if(yesOrNo) {
-            q_yes_new = q_yes_new + numberOfShares * PAYOUT_PER_SHARE;                              // if buying yes tokens increase q_yes                 
+            q_yes_new = q_yes_new - numberOfShares * PAYOUT_PER_SHARE;                              // if buying yes tokens decrease q_yes                 
         } else {
-            q_no_new = q_no_new + numberOfShares * PAYOUT_PER_SHARE;                                // otherwise increase q_no    
+            q_no_new = q_no_new - numberOfShares * PAYOUT_PER_SHARE;                                // otherwise decrease q_no    
         }
         int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
         int c_new = lmsr_cost(int(b_current), q_yes_new, q_no_new);                                 // calc LMSR cost after tx
-        int deposit_sub_total = c_new - c_current;                                                  // total before fees
-        int total_BPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);
-        int deposit_total = floor_div(deposit_sub_total * (10000 + total_BPF), 10000);              // total deposit due including fees
-        int fee_amount = deposit_total - deposit_sub_total;
+        int gross_payout = -(c_new - c_current);                                                    // payout total before fees
+        int total_BPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);                        
+        int fee_amount = floor_div(gross_payout * total_BPF, 10000);                     
+        int net_payout = gross_payout - fee_amount;                                                 // payout total after fees
         int trading_fees_new = int(trading_fees_curent) + fee_amount;
 
         require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
@@ -238,48 +238,49 @@ contract PredictionMarketBuyTokens() {
                                                                              bytes6(trading_fees_new) + // update trading fees
                                                                              marketStatus
                 );
-        require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis                 
+        require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis     
 
-        require(deposit_total > 0);                                                                 // depsoit amount must be > 0
-
-        require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                     // send BCH to PredictionMarketManager contract
-        require(tx.outputs[2].tokenCategory == 0x);                                                 // no tokens on output 3
-        require(tx.outputs[2].value >= deposit_total);                                              // must be at least the deposit required
+        require(net_payout > 0);                                                                    // net payout amount must be > 0
         
         int delta_yes = q_yes_new - int(q_yes_current);                                             // calc change in q_yes
         int delta_no = q_no_new - int(q_no_current);                                                // calc change in q_no
-        int buyer_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                              // calc yes tokens owed to LP
-        int buyer_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                // calc no tokens owed to LP
+        int seller_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                              // calc yes tokens sold (would be negative for sale)
+        int seller_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                // calc no tokens sold (would be negative for sale)
 
-        if(buyer_yes_tokens > 0) {
-            require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                 // send yes token change to PredictionMarketManager contract
-            require(tx.outputs[3].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
-            require(tx.outputs[3].tokenAmount == tx.inputs[2].tokenAmount - buyer_yes_tokens);      // token amount should be the original token amount - what was sent to buyer
-            require(tx.outputs[3].value == tx.inputs[2].value);                                     // carry over sats
+        if (seller_yes_tokens < 0) {
+            require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                 // yes tokens should be sent to PredictionMarketManager contract
+            require(tx.outputs[2].tokenCategory == tx.inputs[3].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[2].tokenAmount == -seller_yes_tokens);                               // token amount should match the calulation above
+            require(tx.outputs[2].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
+        }
+
+        if (seller_no_tokens < 0) {
+            require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                 // no tokens should be sent to PredictionMarketManager contract
+            require(tx.outputs[2].tokenCategory == tx.inputs[3].tokenCategory);                     // tokenCategory should match the no token category from earlier
+            require(tx.outputs[2].tokenAmount == buyer_no_tokens);                                  // token amount should match the calulation above
+            require(tx.outputs[2].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
+        }
+
+        require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                     // change must be sent to PredictionMarketManager contract
+        require(tx.outputs[3].tokenCategory == 0x);                                                 // change must not have tokens
+        require(tx.outputs[3].value == tx.inputs[2].value - tx.outputs[4].value);                   // change must be everything left in the UTXO after the payout
+
+        require(tx.outputs[4].lockingBytecode == tx.inputs[3].lockingBytecode);                     // send BCH to Seller
+        require(tx.outputs[4].tokenCategory == 0x);                                                 // no tokens
+        require(tx.outputs[4].value <= net_payout);                                                 // must be at less than or equal to payout (for use in fees)
+
+        if(seller_yes_tokens < 0 && tx.inputs[3].tokenAmount + seller_yes_tokens > 0) {
+            require(tx.outputs[5].lockingBytecode == tx.inputs[3].lockingBytecode);                 // send yes token change to Seller if any
+            require(tx.outputs[5].tokenCategory == tx.inputs[3].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[5].tokenAmount == tx.inputs[3].tokenAmount + seller_yes_tokens);     // token amount should be the original token amount - what was ssold
+            require(tx.outputs[5].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
         } 
         
-        if (buyer_no_tokens > 0) {
-            require(tx.outputs[3].lockingBytecode == tx.inputs[1].lockingBytecode);                 // send no token change to PredictionMarketManager contract
-            require(tx.outputs[3].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
-            require(tx.outputs[3].tokenAmount == tx.inputs[2].tokenAmount - buyer_no_tokens);       // token amount should be the original token amount - what was sent to buyer
-            require(tx.outputs[3].value == tx.inputs[2].value);                                     // carry over sats
-        }
-
-        if (buyer_yes_tokens > 0) {
-            require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                 // yes tokens should be sent to buyer
-            require(tx.outputs[4].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the yes token category from earlier
-            require(tx.outputs[4].tokenAmount == buyer_yes_tokens);                                 // token amount should match the calulation above
-            require(tx.outputs[4].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
-        }
-
-        if (buyer_no_tokens > 0) {
-            require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                 // no tokens should be sent to buyer
-            require(tx.outputs[4].tokenCategory == tx.inputs[2].tokenCategory);                     // tokenCategory should match the no token category from earlier
-            require(tx.outputs[4].tokenAmount == buyer_no_tokens);                                  // token amount should match the calulation above
-            require(tx.outputs[4].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
-        }
-
-        require(tx.outputs[5].lockingBytecode == tx.inputs[4].lockingBytecode);                     // change must be sent to buyer's address
-        require(tx.outputs[5].tokenCategory == 0x);                                                 // change must not have tokens
+        if(seller_no_tokens < 0 && tx.inputs[3].tokenAmount + seller_no_tokens > 0) {
+            require(tx.outputs[5].lockingBytecode == tx.inputs[3].lockingBytecode);                 // send yes token change to Seller if any
+            require(tx.outputs[5].tokenCategory == tx.inputs[3].tokenCategory);                     // tokenCategory should match the yes token category from earlier
+            require(tx.outputs[5].tokenAmount == tx.inputs[3].tokenAmount + seller_no_tokens);      // token amount should be the original token amount - what was ssold
+            require(tx.outputs[5].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
+        } 
     }
 }

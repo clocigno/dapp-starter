@@ -240,8 +240,8 @@ contract PredictionMarketRemoveLiquidity() {
 
         int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
         int c_new = lmsr_cost(b_new, q_yes_new, q_no_new);                                          // calc LMSR cost after tx
-        int withdrawl = -(c_new - c_current);                                                       // difference is what user receives
-        require(withdrawl > 0);                                                                     // withdrawl amount must be > 0
+        int withdrawal = -(c_new - c_current);                                                       // difference is what user receives
+        require(withdrawal > 0);                                                                     // withdrawal amount must be > 0
 
         require(tx.outputs[3].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send BCH change to PredictionMarketManager contract
         require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens in the change
@@ -249,7 +249,7 @@ contract PredictionMarketRemoveLiquidity() {
         
         require(tx.outputs[4].lockingBytecode == tx.inputs[4].lockingBytecode);                     // send BCH to LP
         require(tx.outputs[4].tokenCategory == 0x);                                                 // no tokens in the BCH
-        require(tx.outputs[4].value <= withdrawl);                                                  // payout should be less than equal to differences in LMSR costs (can be used to pay for fees)
+        require(tx.outputs[4].value <= withdrawal);                                                  // payout should be less than equal to differences in LMSR costs (can be used to pay for fees)
 
         int LP_leftover_b = int(LP_b_current) + delta_b;
 
