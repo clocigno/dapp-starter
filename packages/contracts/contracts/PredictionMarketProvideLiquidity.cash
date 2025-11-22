@@ -223,7 +223,7 @@ contract PredictionMarketProvideLiquidity() {
         bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
         bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
         bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab market status
-        require(marketStatus == 3);                                                                 // market must still be active
+        require(int(marketStatus) == 3);                                                                 // market must still be active
         int b_new = int(b_current) + delta_b;                                                       // calculate new b value after this transaction
         int k_fixed = floor_div(b_new * SCALE, b_current);                                          // scaling ratio * SCALE (fixed-point)
         int q_yes_new = floor_div(int(q_yes_current) * k_fixed, SCALE);                             // scaled q_yes (proportional to b increase)
