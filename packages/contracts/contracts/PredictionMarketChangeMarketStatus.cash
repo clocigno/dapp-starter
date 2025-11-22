@@ -11,11 +11,11 @@ contract PredictionMarketChangeMarketStatus() {
 //  1   marketNFT                  [NFT]       (from PredictionMarketManager contract)
 //  2   {optional} Payout BCH      [BCH]       (from PredictionMarketManager contract for the fees payout of the oracle and market creator if market is resolved)
 //outputs:
-//  0   masterNFT                     [NFT]       (to this contract)
-//  1   marketNFT                     [NFT]       (to PredictionMarketManager contract)
-//  2   {optional} LP Payout Contract [BCH]       (to PredictionMarketManager contract)
-//  3   {optional} creator payout     [BCH]       (to market creator)
-//  4   {optional} oracle payout      [BCH]       (to oracle)
+//  0   masterNFT                  [NFT]       (to this contract)
+//  1   marketNFT                  [NFT]       (to PredictionMarketManager contract)
+//  2   {optional} change          [BCH]       (to PredictionMarketManager contract)
+//  3   {optional} creator payout  [BCH]       (to market creator)
+//  4   {optional} oracle payout   [BCH]       (to oracle)
 // ------------------------------------------------------------------------------------
 //marketNFT committment:
 //  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
@@ -40,130 +40,6 @@ contract PredictionMarketChangeMarketStatus() {
 //                  marketStatus [1 byte]   (3 indicates that the oracle has accepted the responsibilty to decide the market of above ID a 0 would mean market resolved to "No", a 1 would mean market resolved to "Yes")
 //  oracleSig: proves authenticity of oracle message
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    int SCALE = 1 << 60;  // Fixed-point scale factor (2^60)
-    int LN2_FIXED = 799144290325165952;  // ln(2) * SCALE
-    int INV_LN2_FIXED = 1663314137230540288;  // 1 / ln(2) * SCALE
-    int PAYOUT_PER_SHARE = 100000;  // sats payout per fungible token
-
-    function bitLength(int x) : int {  // Computes bit length of x 
-        if (x <= 0) {
-            return 0;  // Handle non-positive
-        }
-        int length = 0;
-        int temp = x;
-        // Loop with right shifts to count bits
-        do {
-            length = length + 1;  // Increment bit count
-            temp = temp >> 1;  // Shift right (divide by 2)
-            if (temp == 0) {
-                break;  // Stop if no bits left
-            }
-        } while (true);
-        return length;
-    }
-
-    function floor_div(int a, int b) : int {  // Emulates Python floor division (rounds towards -inf)
-        int quot = a / b;  // Integer quotient (truncates towards zero)
-        int rem = a % b;  // Remainder
-        // If signs differ and remainder exists, adjust down
-        if ((a < 0 && b > 0) || (a > 0 && b < 0)) {
-            if (rem != 0) {
-                quot = quot - 1;  // Floor adjustment for negative cases
-            }
-        }
-        return quot;
-    }
-
-    function approx_exp_fixed(int x_fixed) : int {  // Approximates exp(x_fixed / SCALE) * SCALE using Taylor series
-        int result = SCALE;  // Start with 1.0 in fixed-point
-        int term = x_fixed;  // First term: x
-        result = result + term;
-        int k = 2;
-        do {
-            term = floor_div(term * x_fixed, SCALE * k);  // Next term: prev * x / (k * SCALE)
-            result = result + term;  // Accumulate
-            if (abs(term) < 1) {
-                break;  // Stop if term negligible
-            }
-            k = k + 1;
-            if (k >= 100) {
-                break;  // Safety cap
-            }
-        } while (true);
-        return result;
-    }
-
-    function approx_pow2_fixed(int x_fixed) : int {  // Approximates 2^(x_fixed / SCALE) * SCALE
-        int exponent_fixed = floor_div(x_fixed * LN2_FIXED, SCALE);  // x * ln(2) for exp conversion
-        if (exponent_fixed < -60 * SCALE) {
-            return 0;  // Underflow to zero
-        } else {
-            return approx_exp_fixed(exponent_fixed);  // Compute via exp
-        }
-    }
-
-    function approx_ln1p_fixed(int u_fixed) : int {  // Approximates ln(1 + u_fixed / SCALE) * SCALE using Taylor series
-        if (u_fixed == 0) {
-            return 0;  // Base case
-        }
-        int result = 0;
-        int power = u_fixed;  // Start with u
-        int sign = 1;
-        int term = power / 1;  // First term: u/1
-        result = result + sign * term;
-        int k = 2;
-        do {
-            power = floor_div(power * u_fixed, SCALE);  // Next power: prev * u / SCALE
-            if (power == 0) {
-                break;  // Underflow stop
-            }
-            term = power / k;  // Term: power / k (integer div)
-            sign = -sign;  // Alternate sign
-            result = result + sign * term;
-            if (abs(term) < 1) {
-                break;  // Negligible term stop
-            }
-            k = k + 1;
-            if (k >= 100000) {
-                break;  // Safety cap
-            }
-        } while (true);
-        return result;
-    }
-
-    function approx_log2_fixed(int y_fixed) : int {  // Approximates log2(y_fixed / SCALE) * SCALE
-        if (y_fixed <= 0) {
-            require(false, "y must be positive");  // Error on invalid input
-        }
-        if (y_fixed < 1) {
-            return 0;  // Tiny values to zero
-        }
-        int exp = bitLength(y_fixed) - 1;  // Integer part of log2
-        int shift = 60 - exp;  // Shift to normalize to [1,2) * SCALE
-        int mantissa_fixed;
-        if (shift > 0) {
-            mantissa_fixed = y_fixed << shift;  // Multiply by 2^shift
-        } else {
-            mantissa_fixed = y_fixed >> (-shift);  // Divide by 2^|shift|
-        }
-        int u_fixed = mantissa_fixed - SCALE;  // u for ln(1+u)
-        int ln_frac = approx_ln1p_fixed(u_fixed);  // Fractional ln
-        int frac_log2_fixed = floor_div(ln_frac * INV_LN2_FIXED, SCALE);  // Convert to log2
-        int total_log2_fixed = (exp - 60) * SCALE + frac_log2_fixed;  // Combine integer + fraction
-        return total_log2_fixed;
-    }
-
-    function lmsr_cost(int b, int q_yes, int q_no) : int {  // Computes LMSR cost C = b * log2(2^{q_yes/b} + 2^{q_no/b})
-        int x_yes_fixed = floor_div(q_yes * SCALE, b);  // q_yes / b * SCALE
-        int pow_yes = approx_pow2_fixed(x_yes_fixed);  // 2^{q_yes/b} * SCALE
-        int x_no_fixed = floor_div(q_no * SCALE, b);  // q_no / b * SCALE
-        int pow_no = approx_pow2_fixed(x_no_fixed);  // 2^{q_no/b} * SCALE
-        int sum_fixed = pow_yes + pow_no;  // Sum * SCALE
-        int log2_fixed = approx_log2_fixed(sum_fixed);  // log2(sum) * SCALE
-        int cost = floor_div(b * log2_fixed, SCALE);  // b * log2(sum)
-        return cost;
-    }
-
     function changeMarketStaus(string event, bytes21 oracleMessage, datasig oracleSig) {
         bytes20 oracleMarketID, byte oracleStatus = oracleMessage.split(20);                        // define the two values from the oracle message
         bytes20 marketID = hash160(event);                                                          // hash the string from the function parameter
@@ -173,11 +49,8 @@ contract PredictionMarketChangeMarketStatus() {
         bytes20 oraclePKH, bytes28 last28 = last48.split(20);                                       // grab oracle PKH from market nft commitment
         byte creatorBPF, bytes27 last27 = last28.split(1);                                          // grab market creator basis points fee
         byte oracleBPF, bytes26 last26 = last27.split(1);                                           // grab oracle basis points fee
-        byte LPBPF, bytes25 last25 = last26.split(1);                                               // grab LP basis point 
-        bytes6 b_current, bytes19 last19 = last25.split(6);                                         // grab current b from marketNFT commitment
-        bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
-        bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
-        bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab market status
+        byte LPBPF, bytes25 last25 = last26.split(1);                                               // grab LP basis point
+        bytes19 next18, bytes7 last7 = last25.split(18);
         bytes6 trading_fees, byte marketStatus = last7.split(6);                                    // grab trading fees and market status from marketNFT commitment
 
         require(marketID == nftMarketID);                                                           // the marketID derived from the function parameter must match the one on the nftCommitment
@@ -219,12 +92,11 @@ contract PredictionMarketChangeMarketStatus() {
         int oraclePayout = int(oracleBPF) * int(trading_fees) / totalBPF;
 
         if(oracleStatus == 0 || oracleStatus == 1) {
-            require(tx.outputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketRedeemHash));  // to PredictionMarketRedeem contract - (PredictionMarketRedeemHash is just a placeholder - the actual contract would have a hardcoded hash)
+            require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                           // change to PredictionMarketManager contract
             require(tx.outputs[2].tokenCategory == 0x);                                                       // no tokens
-            require(tx.outputs[2].value == lmsr_cost(int(b_current), int(q_yes_curent), int(q_no_current)) - 
-                                           (tx.outputs[3].value + tx.outputs[4].value));                      // value is everything that left in LMCR Cost function after paying creator and oracle, reddem contract is where token holders and LPS can redeem
+            require(tx.outputs[2].value == tx.inputs[2].value - (tx.outputs[3].value + tx.outputs[4].value)); // value is everything that left in UTXO after paying creator and oracle
 
-            require(tx.outputs[3].lockingBytecode == new LockingBytecodeP2PKH(oraclePKH));                    // trading fees payout to market creator
+            require(tx.outputs[3].lockingBytecode == new LockingBytecodeP2PKH(oraclePKH));                    // trrading fees payout to market creator
             require(tx.outputs[3].tokenCategory == 0x);                                                       // no tokens
             require(tx.outputs[3].value == creatorPayout);                                                    // payout value is based on ratio of creatorBPF to totalBPF
 
