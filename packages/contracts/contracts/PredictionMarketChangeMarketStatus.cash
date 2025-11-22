@@ -1,0 +1,110 @@
+pragma cashscript ^0.13.0;
+
+contract PredictionMarketChangeMarketStatus() {
+  ////////////////////////////////////////////////////////////////////////////////////////
+ ////////////////////////////    Change Market Staus in Prediction Market   /////////////
+////////////////////////////////////////////////////////////////////////////////////////
+//  Uses oracle message to change the status of a prediction market
+// ------------------------------------------------------------------------------------
+//inputs: 
+//  0   masterNFT                  [NFT]       (from this contract - proves contract authorization)
+//  1   marketNFT                  [NFT]       (from PredictionMarketManager contract)
+//  2   {optional} Payout BCH      [BCH]       (from PredictionMarketManager contract for the fees payout of the oracle and market creator if market is resolved)
+//outputs:
+//  0   masterNFT                  [NFT]       (to this contract)
+//  1   marketNFT                  [NFT]       (to PredictionMarketManager contract)
+//  2   {optional} change          [BCH]       (to PredictionMarketManager contract)
+//  3   {optional} creator payout  [BCH]       (to market creator)
+//  4   {optional} oracle payout   [BCH]       (to oracle)
+// ------------------------------------------------------------------------------------
+//marketNFT committment:
+//  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
+//  yes tokenCategory hash    [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  no tokenCategory hash     [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  creatorPKH                [20 bytes] (pubkey hash of the market creator (likely frontend platform) who provides the BCH UTXOs)  
+//  oraclePKH                 [20 bytes] (pubkey hash for the oracle that will decide the market's outcome, Yes or No)
+//  creator basis points fee  [1 bytes]  (trading fee that goes to market creator, in percentage basis points)
+//  oracle basis points fee   [1 bytes]  (trading fee that goes to oracle, in percentage basis points)
+//  LP basis points fee       [1 bytes]  (trading fee that goes to liquiity provider)
+//  b                         [6 bytes]  (measure of liquidity pool depth, starts at 0 and goes up as liquity is added)
+//  q_yes                     [6 bytes]  (quantity of "Yes" unit shares outstanding in sats, starts at 0 amd goes up as "Yes" shares are purchased)
+//  q_no                      [6 bytes]  (quantity of "No" unit shares outstanding in sats, starts at 0 amd goes up as "No" shares are purchased)
+//  trading fees              [6 bytes]  (accumulated trading fees)
+//  market status             [1 byte]   (from oracle messages)
+// ___________________________________
+//  total                     [128 bytes]
+// ------------------------------------------------------------------------------------
+//parameters:
+//  event: string representing the prediction to be resolved or an IPFS address with relevant market JSON data i.e. "The Cleveland Browns will win the 2026 Super Bowel"
+//  oracleMessage:  marketID     [20 bytes] (hash of a event string or IPFS address that becomes marketID)
+//                  marketStatus [1 byte]   (3 indicates that the oracle has accepted the responsibilty to decide the market of above ID a 0 would mean market resolved to "No", a 1 would mean market resolved to "Yes")
+//  oracleSig: proves authenticity of oracle message
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    function changeMarketStaus(string event, bytes21 oracleMessage, datasig oracleSig) {
+        bytes20 oracleMarketID, byte oracleStatus = oracleMessage.split(20);                        // define the two values from the oracle message
+        bytes20 marketID = hash160(event);                                                          // hash the string from the function parameter
+        bytes20 nftMarketID, bytes108 last108 = tx.inputs[1].nftCommitment.split(20);               // grab market ID from market nft commitment
+        bytes40 next40, bytes68 last68 = last108.split(40);
+        bytes20 creatorPKH, bytes48 last48 = last68.split(20);                                      // grab market creator PKH from market nft commitment
+        bytes20 oraclePKH, bytes28 last28 = last48.split(20);                                       // grab oracle PKH from market nft commitment
+        byte creatorBPF, bytes27 last27 = last28.split(1);                                          // grab market creator basis points fee
+        byte oracleBPF, bytes26 last26 = last27.split(1);                                           // grab oracle basis points fee
+        byte LPBPF, bytes25 last25 = last26.split(1);                                               // grab LP basis point 
+        bytes19 next18, bytes7 last7 = last25.split(18);
+        bytes6 trading_fees, byte marketStatus = last7.split(6);                                    // grab trading fees and market status from marketNFT commitment
+
+        require(marketID == nftMarketID);                                                           // the marketID derived from the function parameter must match the one on the nftCommitment
+        require(marketID == oracleMarketID);                                                        // the marketID derived from the parameter must match the one from oracle message
+        require(checkDataSig(oracleSig, oracleMessage, new LockingBytecodeP2PKH(oraclePKH)));       // check that message came from oracle
+
+        require(tx.inputs.length <=3);                                                              // less than or equal to three inputs
+
+        require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must come from this contract       
+        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory);                              // verify UTXO is a PredictionMarket Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[0].nftCommitment == bytes128(0));                                         // all 0s in the commitment
+
+        require(tx.inputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));       // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[1].tokenCategory == masterTokenCategory);                                            // must be an immutable marketNFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+
+        if(oracleStatus == 0 || oracleStatus == 1) {
+            require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+            require(tx.inputs[2].tokenCategory == 0x);                                                         // no tokens
+        } else {
+            require(tx.inputs.length == 2);
+        }
+
+        require(tx.outputs.length <= 5);                                                            // less than five outputs
+
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[0].nftCommitment == tx.inputs[0].nftCommitment);                         // carry forward commitment
+        require(tx.outputs[0].value == tx.inputs[0].value);                                         // carry forward satoshis
+
+        require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                               // recreate marketNFT on PredictionMarketManager contract
+        require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                                   // carry forward category + capability
+        require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                                       // carry forward token balance
+        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment.split(127)[0] + oracleStatus);      // set commitment the same except for changing market status
+        require(tx.outputs[1].value == tx.inputs[1].value);                                                   // carry forward satoshis
+
+        int totalBPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);
+        int creatorPayout = int(creatorBPF) * int(trading_fees) / totalBPF;                                    
+        int oraclePayout = int(oracleBPF) * int(trading_fees) / totalBPF;
+
+        if(oracleStatus == 0 || oracleStatus == 1) {
+            require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                           // to PredictionMarketManager contract
+            require(tx.outputs[2].tokenCategory == 0x);                                                       // no tokens
+            require(tx.outputs[2].value == tx.inputs[2].value - (tx.outputs[3].value + tx.outputs[4].value)); // value is everything that left in UTXO after paying creator and oracle
+
+            require(tx.outputs[3].lockingBytecode == new LockingBytecodeP2PKH(oraclePKH));                    // trrading fees payout to market creator
+            require(tx.outputs[3].tokenCategory == 0x);                                                       // no tokens
+            require(tx.outputs[3].value == creatorPayout);                                                    // payout value is based on ratio of creatorBPF to totalBPF
+
+            require(tx.outputs[4].lockingBytecode == new LockingBytecodeP2PKH(creatorPKH));                   // trrading fees payout to oracle
+            require(tx.outputs[4].tokenCategory == 0x);                                                       // no tokens
+            require(tx.outputs[4].value == oraclePayout);                                                     // payout value is based on ratio of oracleBPF to totalBPF
+        } else {
+            require(tx.outputs.length == 2);
+        }
+    }
+}

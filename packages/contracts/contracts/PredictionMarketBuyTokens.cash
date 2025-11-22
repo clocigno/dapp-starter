@@ -209,7 +209,8 @@ contract PredictionMarketBuyTokens() {
         bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
         bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
         bytes6 trading_fees_curent, byte marketStatus = last7.split(6);                             // grab market status from marketNFT commitment
-        require(marketStatus == 3);                                                                 // market must still be ongoing
+        require(int(marketStatus) == 3);                                                            // market must still be ongoing
+        require(int(b_current) >= 10_000_000);                                                      // minimum 0.1 BCH liquidity required for trading
         int q_yes_new = int(q_yes_curent);
         int q_no_new = int(q_no_curent);
         if(yesOrNo) {
@@ -228,15 +229,15 @@ contract PredictionMarketBuyTokens() {
         require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
         require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                         // carry forward category + capability
         require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                             // carry forward token balance
-        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment == first100 +             // carry over the first part of the commitment as is
-                                                                             creatorBPF +    
-                                                                             oracleBPF +     
-                                                                             LPBPF +
-                                                                             b_current +
-                                                                             bytes6(q_yes_new) +        // update q_yes
-                                                                             bytes6(q_yes_new) +        // update q_no
-                                                                             bytes6(trading_fees_new) + // update trading fees
-                                                                             marketStatus
+        require(tx.outputs[1].nftCommitment == first100 +                                           // carry over the first part of the commitment as is
+                                               creatorBPF +    
+                                               oracleBPF +     
+                                               LPBPF +
+                                               b_current +
+                                               bytes6(q_yes_new) +                                  // update q_yes
+                                               bytes6(q_yes_new) +                                  // update q_no
+                                               bytes6(trading_fees_new) +                           // update trading fees
+                                               marketStatus
                 );
         require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis                 
 
@@ -278,6 +279,7 @@ contract PredictionMarketBuyTokens() {
             require(tx.outputs[4].tokenAmount == buyer_no_tokens);                                  // token amount should match the calulation above
             require(tx.outputs[4].value == 1000);                                                   // set UTXO satoshis to 1000 (for existence)
         }
+        require(buyer_yes_tokens > 0 || buyer_no_tokens > 0);
 
         require(tx.outputs[5].lockingBytecode == tx.inputs[4].lockingBytecode);                     // change must be sent to buyer's address
         require(tx.outputs[5].tokenCategory == 0x);                                                 // change must not have tokens

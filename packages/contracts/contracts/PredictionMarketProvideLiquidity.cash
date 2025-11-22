@@ -206,8 +206,6 @@ contract PredictionMarketProvideLiquidity() {
 
         require(tx.inputs[5].tokenCategory == 0x);                                                  // must have no tokens
 
-        require(tx.outputs.length <= 10);                                                           // ten or less outputs
-
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
         require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
         require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward token balance
@@ -234,14 +232,14 @@ contract PredictionMarketProvideLiquidity() {
         require(tx.outputs[2].lockingBytecode == tx.inputs[2].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
         require(tx.outputs[2].tokenCategory == tx.inputs[2].tokenCategory);                         // carry forward category + capability
         require(tx.outputs[2].tokenAmount == tx.inputs[2].tokenAmount);                             // carry forward token balance
-        require(tx.outputs[2].nftCommitment == tx.inputs[2].nftCommitment == nftMarketID +          // carry over the first part of the commitment as is
-                                                                             yesTokenCategory +
-                                                                             noTokencategory +
-                                                                             next43 +
-                                                                             bytes6(b_new) +        // update b 
-                                                                             bytes6(q_yes_new) +    // update q_yes
-                                                                             bytes6(q_no_new) +     // update q_no
-                                                                             last7
+        require(tx.outputs[2].nftCommitment ==  nftMarketID +                                       // carry over the first part of the commitment as is
+                                                yesTokenCategory +
+                                                noTokencategory +
+                                                next43 +
+                                                bytes6(b_new) +                                     // update b 
+                                                bytes6(q_yes_new) +                                 // update q_yes
+                                                bytes6(q_no_new) +                                  // update q_no
+                                                last7
                 );
         require(tx.outputs[2].value == tx.inputs[2].value);                                         // carry forward satoshis                 
 
@@ -275,6 +273,7 @@ contract PredictionMarketProvideLiquidity() {
         require(tx.outputs[6].nftCommitment == marketID + bytes6(delta_b));                         // set NFT commitment on receipt = marketID + liquidity provided in this tx
         require(tx.outputs[6].value == 1000);                                                       // set UTXO satoshis to 1000 (for existence)                
 
+        int maxOutputs = 10;
         int outputIndex = 7;                                                                        // index for uncertain outputs  
 
         // Neutral Yes tokens to LP (only if >0)
@@ -284,6 +283,8 @@ contract PredictionMarketProvideLiquidity() {
             require(tx.outputs[outputIndex].tokenAmount == lp_yes_tokens);                          // token amount should match the calulation above
             require(tx.outputs[outputIndex].value == 1000);                                         // set UTXO satoshis to 1000 (for existence)
             outputIndex = outputIndex + 1;
+        } else {
+            maxOutputs = maxOutputs - 1;
         }
 
         // Neutral No tokens to LP (only if >0)
@@ -293,9 +294,12 @@ contract PredictionMarketProvideLiquidity() {
             require(tx.outputs[outputIndex].tokenAmount == lp_no_tokens);                           // token amount should match the calulation above
             require(tx.outputs[outputIndex].value == 1000);                                         // set UTXO satoshis to 1000 (for existence)
             outputIndex = outputIndex + 1;
+        } else {
+            maxOutputs = maxOutputs - 1;
         }
 
         require(tx.outputs[outputIndex].lockingBytecode == tx.inputs[5].lockingBytecode);           // change must be sent to LP's address
         require(tx.outputs[outputIndex].tokenCategory == 0x);                                       // change must not have tokens
+        require(tx.outputs.length == maxOutputs);
     }
 }
