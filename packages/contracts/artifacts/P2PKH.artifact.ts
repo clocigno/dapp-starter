@@ -22,7 +22,7 @@ export default {
     }
   ],
   bytecode: "OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG",
-  source: "// P2PKH wrapped in P2SH\ncontract P2PKH(bytes20 pkh) {\n    // Require pk to match stored pkh and signature to match\n    function spend(pubkey pk, sig s) {\n        require(hash160(pk) == pkh);\n        require(checkSig(s, pk));\n    }\n}\n",
+  source: "// P2PKH wrapped in P2SH\r\ncontract P2PKH(bytes20 pkh) {\r\n    // Require pk to match stored pkh and signature to match\r\n    function spend(pubkey pk, sig s) {\r\n        require(hash160(pk) == pkh);\r\n        require(checkSig(s, pk));\r\n    }\r\n}\r\n",
   debug: {
     bytecode: "78a988ac",
     sourceMap: "5:24:5:26;:16::27:1;:8::36;6::6:33",
@@ -40,7 +40,7 @@ export default {
   },
   compiler: {
     name: "cashc",
-    version: "0.12.0"
+    version: "0.13.0-next.1"
   },
-  updatedAt: "2025-10-30T08:37:45.960Z"
+  updatedAt: "2025-11-22T22:15:38.414Z"
 } as const;

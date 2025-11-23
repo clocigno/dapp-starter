@@ -1,0 +1,86 @@
+pragma cashscript ^0.13.0;
+
+contract PredictionMarketRedeemTokens() {
+  //////////////////////////////////////////////////////////////////////////////////////////
+ ///////////////////////    Redeem Yes/No Tokens for After Resolution /////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+// ------------------------------------------------------------------------------------
+//inputs: 
+//  0   masterNFT                 [NFT]       (from this contract - proves contract authorization)
+//  1   marketNFT                 [NFT]       (from PredictionMarketManager contract)
+//  2   BCH for redemption        [BCH]       (from PredictionMarketManager contract)
+//  3   {optional} yesTokens      [FT]        (from Redeemer)
+//  3   {optional} noTokens       [FT]        (from Redeemer)
+//outputs:                                                     
+//  0   masterNFT                 [NFT]       (to this contract)  
+//  1   marketNFT                 [NFT]       (to PredictionMarketManager contract)     
+//  2   change                    [BCH]       (to PredictionMarketManager contract)
+//  3   BCH for redemption        [BCH]       (to Redeemer) 
+// ------------------------------------------------------------------------------------
+//marketNFT committment:
+//  marketID                  [20 bytes] (hash of a event string or IPFS address that becomes marketID)
+//  yes tokenCategory hash    [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  no tokenCategory hash     [20 bytes] (hash of one of the tokenCategory of one of the fungible tokens, redeemable for 0.001 BCH with an oracle message confirming its correct prediction)
+//  creatorPKH                [20 bytes] (pubkey hash of the market creator (likely frontend platform) who provides the BCH UTXOs)  
+//  oraclePKH                 [20 bytes] (pubkey hash for the oracle that will decide the market's outcome, Yes or No)
+//  creator basis points fee  [1 bytes]  (trading fee that goes to market creator, in percentage basis points)
+//  oracle basis points fee   [1 bytes]  (trading fee that goes to oracle, in percentage basis points)
+//  LP basis points fee       [1 bytes]  (trading fee that goes to liquiity provider)
+//  b                         [6 bytes]  (measure of liquidity pool depth, starts at 0 and goes up as liquity is added)
+//  q_yes                     [6 bytes]  (quantity of "Yes" unit shares outstanding in sats, starts at 0 amd goes up as "Yes" shares are purchased)
+//  q_no                      [6 bytes]  (quantity of "No" unit shares outstanding in sats, starts at 0 amd goes up as "No" shares are purchased)
+//  trading fees              [6 bytes]  (accumulated trading fees)
+//  market status             [1 byte]   (from oracle messages)
+// ___________________________________
+//  total                     [128 bytes]
+//////////////////////////////////////////////////////////////////////////////////////////
+    function redeemTokens() {
+        bytes20 marketID, bytes108 final108 = tx.inputs[1].nftCommitment.split(20);                        // grab the marketID from the nftCommitment
+        bytes20 yesTokenCategory, bytes88 final88 = final108.split(20);                                    // grab yes token category from marketNFT commitment
+        bytes20 noTokencategory, bytes68 final68 = final88.split(20);                                      // grab no token category from marketNFT commitment
+        bytes67 next67, byte marketStatus = final68.split(67);                                             // grab market status from marketNFT commitment
+
+        require(tx.inputs.length == 4);                                                                    // exactly four inputs
+        
+        require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);         // UTXO must come from this contract       
+        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory);                                     // verify UTXO is a PredictionMarket Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[0].nftCommitment == bytes128(0));                                                // all 0s in the commitment
+
+        require(tx.inputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[1].tokenCategory == masterTokenCategory);                                        // must be an immutable active marketNFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+
+        require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.inputs[2].tokenCategory == 0x);                                                         // must have no tokens
+
+        require(int(marketStatus) == 1 || int(marketStatus) == 0);
+
+        if(int(marketStatus) == 1) {
+            require(tx.inputs[3].tokenCategory == yesTokenCategory);                                       // must match the yes token category from the marketNFT commitment
+        } else {
+            require(tx.inputs[3].tokenCategory == noTokencategory);                                        // must match the no token category from the marketNFT commitment
+        }
+        
+        require(tx.outputs.length == 4);                                                            // exactly four outputs
+
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
+        require(tx.outputs[0].tokenCategory == tx.inputs[0].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[0].tokenAmount == tx.inputs[0].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[0].nftCommitment == tx.inputs[0].nftCommitment);                         // carry forward commitment
+        require(tx.outputs[0].value == tx.inputs[0].value);                                         // carry forward satoshis
+
+        require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
+        require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                         // carry forward category + capability
+        require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                             // carry forward token balance
+        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment);                         // carry over the commitment as is
+        require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis     
+
+        require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                     // change must be sent to PredictionMarketManager contract
+        require(tx.outputs[2].tokenCategory == 0x);                                                 // change must not have tokens
+        require(tx.outputs[2].value == tx.inputs[2].value - tx.outputs[3].value);                   // change must be everything left in the UTXO after the payout
+
+        int payout = tx.inputs[3].tokenAmount * 100_000;                                            // payout is 0.001 BCH
+        require(tx.outputs[3].lockingBytecode == tx.inputs[3].lockingBytecode);                     // send BCH to Redeemer
+        require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens
+        require(tx.outputs[3].value <= payout);                                                     // must be at less than or equal to payout (for use in fees)
+    }
+}
