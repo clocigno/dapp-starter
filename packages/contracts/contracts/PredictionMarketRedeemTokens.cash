@@ -9,8 +9,7 @@ contract PredictionMarketRedeemTokens() {
 //  0   masterNFT                 [NFT]       (from this contract - proves contract authorization)
 //  1   marketNFT                 [NFT]       (from PredictionMarketManager contract)
 //  2   BCH for redemption        [BCH]       (from PredictionMarketManager contract)
-//  3   {optional} yesTokens      [FT]        (from Redeemer)
-//  3   {optional} noTokens       [FT]        (from Redeemer)
+//  3   yes or no Tokens          [FT]        (from Redeemer)
 //outputs:                                                     
 //  0   masterNFT                 [NFT]       (to this contract)  
 //  1   marketNFT                 [NFT]       (to PredictionMarketManager contract)     
@@ -82,5 +81,5 @@ contract PredictionMarketRedeemTokens() {
         require(tx.outputs[3].lockingBytecode == tx.inputs[3].lockingBytecode);                     // send BCH to Redeemer
         require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens
         require(tx.outputs[3].value <= payout);                                                     // must be at less than or equal to payout (for use in fees)
-    }
+    }                                                                                               // tokens implicitly burned
 }

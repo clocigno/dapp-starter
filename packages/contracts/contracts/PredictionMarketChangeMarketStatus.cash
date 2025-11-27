@@ -51,7 +51,7 @@ contract PredictionMarketChangeMarketStatus() {
         byte oracleBPF, bytes26 last26 = last27.split(1);                                           // grab oracle basis points fee
         byte LPBPF, bytes25 last25 = last26.split(1);                                               // grab LP basis point
         bytes19 next18, bytes7 last7 = last25.split(18);
-        bytes6 trading_fees, byte marketStatus = last7.split(6);                                    // grab trading fees and market status from marketNFT commitment
+        bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab trading fees and market status from marketNFT commitment
 
         require(marketID == nftMarketID);                                                           // the marketID derived from the function parameter must match the one on the nftCommitment
         require(marketID == oracleMarketID);                                                        // the marketID derived from the parameter must match the one from oracle message
@@ -73,6 +73,11 @@ contract PredictionMarketChangeMarketStatus() {
             require(tx.inputs.length == 2);
         }
 
+        int totalBPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);
+        int creatorPayout = int(creatorBPF) * int(trading_fees) / totalBPF;                                    
+        int oraclePayout = int(oracleBPF) * int(trading_fees) / totalBPF;
+        int trading_fees_new = int(trading_fees_current) - (creatorPayout + oraclePayout);
+
         require(tx.outputs.length <= 5);                                                            // less than five outputs
 
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);                     // recreate masterNFT on this contract
@@ -84,12 +89,8 @@ contract PredictionMarketChangeMarketStatus() {
         require(tx.outputs[1].lockingBytecode == tx.inputs[1].lockingBytecode);                               // recreate marketNFT on PredictionMarketManager contract
         require(tx.outputs[1].tokenCategory == tx.inputs[1].tokenCategory);                                   // carry forward category + capability
         require(tx.outputs[1].tokenAmount == tx.inputs[1].tokenAmount);                                       // carry forward token balance
-        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment.split(127)[0] + oracleStatus);      // set commitment the same except for changing market status
+        require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment.split(121)[0] + oracleStatus);      // set commitment the same, changing only trading fees and market status
         require(tx.outputs[1].value == tx.inputs[1].value);                                                   // carry forward satoshis
-
-        int totalBPF = int(creatorBPF) + int(oracleBPF) + int(LPBPF);
-        int creatorPayout = int(creatorBPF) * int(trading_fees) / totalBPF;                                    
-        int oraclePayout = int(oracleBPF) * int(trading_fees) / totalBPF;
 
         if(oracleStatus == 0 || oracleStatus == 1) {
             require(tx.outputs[2].lockingBytecode == tx.inputs[1].lockingBytecode);                           // change to PredictionMarketManager contract
