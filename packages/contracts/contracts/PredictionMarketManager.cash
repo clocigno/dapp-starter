@@ -12,7 +12,10 @@ contract PredictionMarketManager() {
 //  This contract will hold the marketNFTs, fungible tokens, and BCH
 //////////////////////////////////////////////////////////////////////////////////////////
     function externalFunction() {                                                                  // interact with another contract
-        require(tx.inputs[0].tokenCategory == masterTokenCategory);                                // input 0 from the other contract must be a immutable master NFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        bytes32 MASTER_NFT_CATEGORY = 0xAAAAAAAAAA;                                                // masterNFT tokenCategory placeholder - change when token is created
+
+        require(this.activeInputIndex > 0);                                                        // prevent any UTXO from this contract being used at index 0
+        require(tx.inputs[0].tokenCategory == MASTER_NFT_CATEGORY);                                // input 0 from the other contract must be a immutable master NFT 
         require(tx.inputs[0].lockingBytecode != tx.inputs[this.activeInputIndex].lockingBytecode); // prevent using a token from this contract for authorization    
     }
 }

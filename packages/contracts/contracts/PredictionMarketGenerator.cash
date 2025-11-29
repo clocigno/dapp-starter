@@ -46,7 +46,10 @@ contract PredictionMarketGenerator() {
 //                  marketStatus [1 byte]   (3 indicates that the oracle has accepted the responsibilty to decide the market of above ID a 0 would mean market resolved to "No", a 1 would mean market resolved to "Yes")
 //  oracleSig: proves authenticity of oracle message
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    function createMarket(string event, bytes20 creatorPKH, bytes20 oraclePKH, int creatorBPF, int oracleBPF, int LPBPF, bytes21 oracleMessage, datasig oracleSig) {
+        function createMarket(string event, bytes20 creatorPKH, bytes20 oraclePKH, int creatorBPF, int oracleBPF, int LPBPF, bytes21 oracleMessage, datasig oracleSig) {
+        bytes32 MASTER_NFT_CATEGORY = 0xAAAAAAAAAA;                                                 // masterNFT tokenCategory placeholder - change when token is created
+        bytes32 MANAGER_P2SH32 = 0xBBBBBBBBBB;                                                      // PredictionMarketManager address placeholder, change when contract is created
+        int MAX_TOKENS = 9223372036854775807;                                                       // max fungible token supply
         bytes20 oracleMarketID, byte oracleStatus = oracleMessage.split(20);                        // define the two values from the oracle message
         bytes20 marketID = hash160(event);                                                          // hash the string from the function parameter
 
@@ -60,7 +63,7 @@ contract PredictionMarketGenerator() {
         require(tx.inputs.length == 3);                                                             // exactly three inputs
         
         require(this.activeInputIndex == 0);                                                        // this contract's UTXO must be input 0         
-        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory + 0x02);                       // verify contract UTXO is a PredictionMarket minting Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[0].tokenCategory == MASTER_NFT_CATEGORY + 0x02);                          // verify contract UTXO is a PredictionMarket minting Master NFT
         require(tx.inputs[0].nftCommitment == bytes128(0));                                         // verify contract UTXO is the minting Master NFT (all 0s in the commitment)
 
         int inputIndex = 1;                                                                         // index for loop
@@ -93,16 +96,16 @@ contract PredictionMarketGenerator() {
                                                bytes6(0) +     
                                                byte(3)
                 );                                                                                         // see explanation above                             
-        require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));  // send marketNFT to PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+        require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2SH32(MANAGER_P2SH32));               // send marketNFT to PredictionMarketManager contract 
         require(tx.outputs[1].tokenCategory == tx.inputs[0].tokenCategory.split(32)[0] + 0x01);            // set marketNFT's tokenCategory to same as MasterNFT's (mutable instead of minting)
         require(tx.outputs[1].value == 1000);                                                              // set marketNFT's UTXO satoshis to 1000 (for existence)
         require(tx.outputs[1].tokenAmount == 0);                                                           // prevent fungible tokens
 
         int outputIndex = 2;                                                                                             // index for loop
         do {
-            require(tx.outputs[outputIndex].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));  // send fungible tokens to PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
+            require(tx.outputs[outputIndex].lockingBytecode == new LockingBytecodeP2SH32(MANAGER_P2SH32));               // send fungible tokens to PredictionMarketManager contract 
             require(tx.outputs[outputIndex].tokenCategory == tx.inputs[outputIndex - 1].outpointTransactionHash);        // tokenCategory should be the parent transaction hash of creatorUTXO1 or creatorUTXO2
-            require(tx.outputs[outputIndex].tokenAmount == 9223372036854775807);                                         // tokenAmount must be max token supply
+            require(tx.outputs[outputIndex].tokenAmount == MAX_TOKENS);                                                  // tokenAmount must be max token supply
             require(tx.outputs[outputIndex].value == 1000);                                                              // set UTXO satoshis to 1000 (for existence)
             outputIndex = outputIndex + 1;                                                                               // increment index
         } while(outputIndex < 4);                                                                                        // loop goes through outputs 2 and 3
@@ -113,5 +116,4 @@ contract PredictionMarketGenerator() {
             require(tx.outputs[4].tokenCategory == 0x);                                             // change must not have tokens
         }
     }
-
 }

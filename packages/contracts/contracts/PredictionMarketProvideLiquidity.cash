@@ -176,33 +176,56 @@ contract PredictionMarketProvideLiquidity() {
     }
 
     function provideLiquidity(string event, int delta_b) {
+        bytes32 MASTER_NFT_CATEGORY = 0xAAAAAAAAAA;                                                 // masterNFT tokenCategory placeholder - change when token is created
+        bytes32 MANAGER_P2SH32 = 0xBBBBBBBBBB;                                                      // PredictionMarketManager address placeholder, change when contract is created
+        bytes32 RECEIPT_NFT_CATEGORY = 0xCCCCCCCCCC;                                                // receiptNFT tokenCategory placeholder, change when token is created
+
+        bytes20 marketID = hash160(event);                                                          // hash the string from the function parameter
+        bytes20 nftMarketID, bytes108 final108 = tx.inputs[2].nftCommitment.split(20);              // grab the marketID from the marketNFT commitment
+        bytes20 yesTokenCategory, bytes88 final88 = final108.split(20);                             // grab yes token category from marketNFT commitment
+        bytes20 noTokencategory, bytes68 final68 = final88.split(20);                               // grab no token category from marketNFT commitment
+        bytes43 next43, bytes25 last25 = final68.split(43);
+        bytes6 b_current, bytes19 last19 = last25.split(6);                                         // grab current b from marketNFT commitment
+        bytes6 q_yes_current, bytes13 last13 = last19.split(6);                                     // grab current q_yes from marketNFT commitment
+        bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
+        bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab market status
+        int b_new = int(b_current) + delta_b;                                                       // calculate new b value after this transaction
+        int k_fixed = floor_div(b_new * SCALE, b_current);                                          // scaling ratio * SCALE (fixed-point)
+        int q_yes_new = floor_div(int(q_yes_current) * k_fixed, SCALE);                             // scaled q_yes (proportional to b increase)
+        int q_no_new = floor_div(int(q_no_current) * k_fixed, SCALE);                               // scaled q_no (proportional to b increase)
+        int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
+        int c_new = lmsr_cost(b_new, q_yes_new, q_no_new);                                          // calc LMSR cost after tx
+        int deposit = c_new - c_current;                                                            // difference is what user owes
+        int delta_yes = q_yes_new - int(q_yes_current);                                             // calc change in q_yes
+        int delta_no = q_no_new - int(q_no_current);                                                // calc change in q_no
+        int lp_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                                 // calc yes tokens owed to LP
+        int lp_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                   // calc no tokens owed to LP
+
         require(delta_b > 0);                                                                       // must be adding liquidity
+        require(int(marketStatus) == 3);                                                            // market must not be resolved yet
+        require(b_new > int(b_current) && b_new < 1 << 48);                                         // Safety bounds
+        require(q_yes_new >= int(q_yes_current) && q_no_new >= int(q_no_current));                  // Ensure addition
+        require(deposit > 0);                                                                       // depsoit amount must be > 0
 
         require(tx.inputs.length == 6);                                                             // exactly six inputs
         
         require(tx.inputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must ome from this contract       
-        require(tx.inputs[0].tokenCategory == masterNFTTokenCategory);                              // verify UTXO is a PredictionMarket Master NFT (masterNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[0].tokenCategory == MASTER_NFT_CATEGORY);                                 // verify UTXO is a immutable PredictionMarket Master NFT
         require(tx.inputs[0].nftCommitment == bytes128(0));                                         // all 0s in the commitment
 
         require(tx.inputs[1].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);  // UTXO must come from this contract      
-        require(tx.inputs[1].tokenCategory == receiptNFTTokenCategory + 0x02);                      // verify contract UTXO is a minting PredictionMarket Receipt NFT (receiptNFTTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
+        require(tx.inputs[1].tokenCategory == RECEIPT_NFT_CATEGORY + 0x02);                         // verify contract UTXO is a minting PredictionMarket Receipt NFT
         require(tx.inputs[1].nftCommitment == bytes26(0));                                          // all 0s in the commitment
 
-        bytes20 marketID = hash160(event);                                                                 // hash the string from the function parameter
-        bytes20 nftMarketID, bytes108 final108 = tx.inputs[2].nftCommitment.split(20);                     // grab the marketID from the nftCommitment
+        require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(MANAGER_P2SH32));         // must come from PredictionMarketManager contract 
+        require(tx.inputs[2].tokenCategory == MASTER_NFT_CATEGORY + 0x01);                          // must be a mutable marketNFT
+        require(marketID == nftMarketID);                                                           // the marketID derived from the function parameter must match the one on the nftCommitment
 
-        require(tx.inputs[2].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.inputs[2].tokenCategory == masterTokenCategory);                                        // must be an immutable active marketNFT (masterTokenCategory is just a placeholder - the actual contract would have a hardcoded tokenCategory)
-        require(marketID == nftMarketID);                                                                  // the marketID derived from the function parameter must match the one on the nftCommitment
+        require(tx.inputs[3].lockingBytecode == new LockingBytecodeP2SH32(MANAGER_P2SH32));         // must come from PredictionMarketManager contract 
+        require(tx.inputs[3].tokenCategory == yesTokenCategory);                                    // must match the yes token category from the marketNFT commitment
 
-        bytes20 yesTokenCategory, bytes88 final88 = final108.split(20);                                    // grab yes token category from marketNFT
-        bytes20 noTokencategory, bytes68 final68 = final88.split(20);                                      // grab no token category from marketNFT
-
-        require(tx.inputs[3].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.inputs[3].tokenCategory == yesTokenCategory);                                           // must match the yes token category from the marketNFT commitment
-
-        require(tx.inputs[4].lockingBytecode == new LockingBytecodeP2SH32(PredictionMarketManagerHash));   // must come from PredictionMarketManager contract (PredictionMarketManagerHash is just a placeholder - the actual contract would have a hardcoded hash)
-        require(tx.inputs[4].tokenCategory == noTokencategory);                                            // must match the no token category from the marketNFT commitment
+        require(tx.inputs[4].lockingBytecode == new LockingBytecodeP2SH32(MANAGER_P2SH32));         // must come from PredictionMarketManager contract
+        require(tx.inputs[4].tokenCategory == noTokencategory);                                     // must match the no token category from the marketNFT commitment
 
         require(tx.inputs[5].tokenCategory == 0x);                                                  // must have no tokens
 
@@ -218,17 +241,6 @@ contract PredictionMarketProvideLiquidity() {
         require(tx.outputs[1].nftCommitment == tx.inputs[1].nftCommitment);                         // carry forward nftCommitment                
         require(tx.outputs[1].value == tx.inputs[1].value);                                         // carry forward satoshis        
 
-        bytes43 next43, bytes25 last25 = final68.split(43);
-        bytes6 b_current, bytes19 last19 = last25.split(6);                                         // grab current b from marketNFT commitment
-        bytes6 q_yes_curent, bytes13 last13 = last19.split(6);                                      // grab current q_yes from marketNFT commitment
-        bytes6 q_no_current, bytes7 last7 = last13.split(6);                                        // grab current q_no from marketNFT commitment
-        bytes6 trading_fees_current, byte marketStatus = last7.split(6);                            // grab market status
-        require(int(marketStatus) == 3);                                                                 // market must still be active
-        int b_new = int(b_current) + delta_b;                                                       // calculate new b value after this transaction
-        int k_fixed = floor_div(b_new * SCALE, b_current);                                          // scaling ratio * SCALE (fixed-point)
-        int q_yes_new = floor_div(int(q_yes_current) * k_fixed, SCALE);                             // scaled q_yes (proportional to b increase)
-        int q_no_new = floor_div(int(q_no_current) * k_fixed, SCALE);                               // scaled q_no (proportional to b increase)
-
         require(tx.outputs[2].lockingBytecode == tx.inputs[2].lockingBytecode);                     // recreate marketNFT on PredictionMarketManager contract
         require(tx.outputs[2].tokenCategory == tx.inputs[2].tokenCategory);                         // carry forward category + capability
         require(tx.outputs[2].tokenAmount == tx.inputs[2].tokenAmount);                             // carry forward token balance
@@ -243,20 +255,10 @@ contract PredictionMarketProvideLiquidity() {
                 );
         require(tx.outputs[2].value == tx.inputs[2].value);                                         // carry forward satoshis                 
 
-        int c_current = lmsr_cost(int(b_current), int(q_yes_current), int(q_no_current));           // calc LMSR cost before tx
-        int c_new = lmsr_cost(b_new, q_yes_new, q_no_new);                                          // calc LMSR cost after tx
-        int deposit = c_new - c_current;                                                            // difference is what user owes
-        require(deposit > 0);                                                                       // depsoit amount must be > 0
-
         require(tx.outputs[3].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send BCH to PredictionMarketManager contract
         require(tx.outputs[3].tokenCategory == 0x);                                                 // no tokens on output 3
-        require(tx.outputs[3].value >= deposit);                                                    // must be at least the deposit required
+        require(tx.outputs[3].value == deposit);                                                    // must be at least the deposit required
         
-        int delta_yes = q_yes_new - int(q_yes_current);                                             // calc change in q_yes
-        int delta_no = q_no_new - int(q_no_current);                                                // calc change in q_no
-        int lp_yes_tokens = floor_div(delta_yes, PAYOUT_PER_SHARE);                                 // calc yes tokens owed to LP
-        int lp_no_tokens = floor_div(delta_no, PAYOUT_PER_SHARE);                                   // calc no tokens owed to LP
-
         require(tx.outputs[4].lockingBytecode == tx.inputs[2].lockingBytecode);                     // send yes token change to PredictionMarketManager contract
         require(tx.outputs[4].tokenCategory == tx.inputs[3].tokenCategory);                         // tokenCategory should match the yes token category from earlier
         require(tx.outputs[4].tokenAmount == tx.inputs[3].tokenAmount - lp_yes_tokens);             // token amount should be the original token amount - what was sent to LP
